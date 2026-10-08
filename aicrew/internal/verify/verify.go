@@ -71,13 +71,28 @@ func (v Verifier) Run(ctx context.Context, p Profile, workdir, name string, time
 		image = v.DefaultImage
 	}
 	deadline := time.Now().Add(timeout)
+
+	// Один контейнер на всю проверку: шаги видят то, что подготовили предыдущие
+	// (кэш пакетов в $HOME и т.п.), а не только файлы в /work.
+	start, err := v.R.Run(ctx, runner.Command{Exe: "docker", Timeout: 2 * time.Minute,
+		Args: []string{"run", "-d", "--rm", "--name", name, "-v", workdir + ":/work", "-w", "/work", "--entrypoint", "sleep", image, "infinity"}})
+	if err != nil {
+		return rep, err
+	}
+	if start.ExitCode != 0 {
+		return rep, fmt.Errorf("verify container: %s", strings.TrimSpace(start.Stderr))
+	}
+	defer func() {
+		_, _ = v.R.Run(context.WithoutCancel(ctx), runner.Command{Exe: "docker", Args: []string{"rm", "-f", name}, Timeout: 30 * time.Second})
+	}()
+
 	for _, s := range p.Steps {
 		left := time.Until(deadline)
 		if left <= 0 {
 			rep.Passed, rep.TimedOut, rep.FailedKind = false, true, s.Kind
 			break
 		}
-		args := append([]string{"run", "--rm", "--name", name, "-v", workdir + ":/work", "-w", "/work", image}, s.Argv...)
+		args := append([]string{"exec", name}, s.Argv...)
 		res, err := v.R.Run(ctx, runner.Command{Exe: "docker", Args: args, Timeout: left})
 		if err != nil {
 			return rep, err
@@ -85,7 +100,6 @@ func (v Verifier) Run(ctx context.Context, p Profile, workdir, name string, time
 		out := strings.TrimSpace(res.Stdout + "\n" + res.Stderr)
 		rep.Steps = append(rep.Steps, StepResult{Name: s.Name, ExitCode: res.ExitCode, Seconds: int(res.Duration.Seconds()), Output: tail(out, 4000)})
 		if res.TimedOut {
-			_, _ = v.R.Run(context.WithoutCancel(ctx), runner.Command{Exe: "docker", Args: []string{"kill", name}, Timeout: 30 * time.Second})
 			rep.Passed, rep.TimedOut, rep.FailedKind = false, true, s.Kind
 			break
 		}
