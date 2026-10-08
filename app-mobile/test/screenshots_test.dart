@@ -1,5 +1,8 @@
 // Скриншоты экранов для визуальной проверки и согласования.
 // Обновить: flutter test --update-goldens test/screenshots_test.dart
+@Tags(['golden'])
+library;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';

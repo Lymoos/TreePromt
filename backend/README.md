@@ -57,15 +57,18 @@ GEMINI_API_KEY=... go test ./internal/ai -run Eval -v
 
 ## Развёртывание на VPS
 
-```bash
-cd deploy && cp .env.example .env
-```
+Образы backend и веб-версии (Caddy + Flutter Web) собирает GitHub Actions при каждом push в `main` и кладёт в ghcr.io; на сервере ничего не компилируется.
 
-Заполнить `.env` (домен и два секрета), затем:
+На сервере (Ubuntu/Debian, от root):
 
 ```bash
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/Lymoos/TreePromt/main/backend/deploy/install.sh -o install.sh
 ```
 
-После первого запуска зарегистрировать владельца через `POST /api/v1/auth/register`; дальше регистрация закрывается сама.
-Бэкапы — в `deploy/backups/`, раз в сутки, хранятся 14 дней.
+```bash
+bash install.sh
+```
+
+Скрипт поставит Docker, спросит домен и ключ Gemini (скрытый ввод), сам сгенерирует пароли, проверит порты и DNS и запустит всё в `/opt/prompttree`. Если порт 443 занят (например, VPN), предложит другой порт для HTTPS. Обновление — `/opt/prompttree/update.sh`.
+
+После первого запуска зарегистрировать владельца («Первый запуск: создать владельца»); дальше регистрация закрывается сама. Бэкапы — в `/opt/prompttree/backups`, раз в сутки, хранятся 14 дней.
