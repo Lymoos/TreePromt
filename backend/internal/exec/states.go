@@ -12,9 +12,14 @@ const (
 	StatusVerifying       = "VERIFYING"
 	StatusLLMReview       = "LLM_REVIEW"
 	StatusMergeable       = "MERGEABLE"
-	StatusMerged          = "MERGED"
+	StatusMergeQueued     = "MERGE_QUEUED"
+	StatusMerging         = "MERGING"
 	StatusPostMergeVerify = "POST_MERGE_VERIFY"
+	StatusMerged          = "MERGED"
 	StatusDone            = "DONE"
+	StatusRollbackQueued  = "ROLLBACK_QUEUED"
+	StatusRollingBack     = "ROLLING_BACK"
+	StatusRolledBack      = "ROLLED_BACK"
 	StatusFailed          = "FAILED"
 	StatusBlocked         = "BLOCKED"
 	StatusReplan          = "REPLAN"
@@ -32,6 +37,7 @@ const (
 	ClassRateLimit   = "RATE_LIMIT"
 	ClassAuth        = "AUTH_ERROR"
 	ClassMerge       = "MERGE_CONFLICT"
+	ClassIntegration = "INTEGRATION_FAILURE" // результат слияния не прошёл проверку (7.3)
 	ClassEnvironment = "ENVIRONMENT_FAILURE"
 	ClassQAReject    = "QA_REJECT"
 	ClassAgent       = "AGENT_ERROR"
@@ -39,7 +45,7 @@ const (
 
 func ValidClass(c string) bool {
 	switch c {
-	case ClassBuild, ClassTest, ClassTimeout, ClassNetwork, ClassRateLimit, ClassAuth, ClassMerge,
+	case ClassBuild, ClassTest, ClassTimeout, ClassNetwork, ClassRateLimit, ClassAuth, ClassMerge, ClassIntegration,
 		ClassEnvironment, ClassQAReject, ClassAgent:
 		return true
 	}
@@ -48,18 +54,25 @@ func ValidClass(c string) bool {
 
 // workerTransitions — переходы, которые может запросить воркер, владеющий задачей.
 var workerTransitions = map[string][]string{
-	StatusClaimed:         {StatusInProgress, StatusFailed, StatusCancelled},
-	StatusInProgress:      {StatusVerifying, StatusFailed, StatusCancelled},
-	StatusVerifying:       {StatusLLMReview, StatusFailed, StatusCancelled},
-	StatusLLMReview:       {StatusMergeable, StatusFailed, StatusCancelled},
-	StatusMergeable:       {StatusMerged, StatusFailed, StatusCancelled},
-	StatusMerged:          {StatusPostMergeVerify, StatusFailed},
-	StatusPostMergeVerify: {StatusDone, StatusFailed},
+	StatusClaimed:    {StatusInProgress, StatusFailed, StatusCancelled},
+	StatusInProgress: {StatusVerifying, StatusFailed, StatusCancelled},
+	StatusVerifying:  {StatusLLMReview, StatusFailed, StatusCancelled},
+	StatusLLMReview:  {StatusMergeable, StatusFailed, StatusCancelled},
+	// Очередь слияния (7.3): MERGEABLE → MERGE_QUEUED двигает пользователь или режим задачи.
+	// MERGING → MERGED напрямую — восстановление, если integration уже содержит задачу.
+	StatusMerging:         {StatusPostMergeVerify, StatusMerged, StatusFailed, StatusCancelled},
+	StatusPostMergeVerify: {StatusMerged, StatusFailed, StatusCancelled},
+	StatusMerged:          {StatusDone},
+	StatusRollingBack:     {StatusRolledBack, StatusFailed},
 	StatusCancelling:      {StatusCancelled, StatusFailed},
 }
 
 // leasedStatuses — пока задача в них, воркер обязан слать heartbeat.
-var leasedStatuses = []string{StatusClaimed, StatusInProgress, StatusVerifying, StatusLLMReview, StatusCancelling}
+var leasedStatuses = []string{StatusClaimed, StatusInProgress, StatusVerifying, StatusLLMReview, StatusCancelling,
+	StatusMerging, StatusPostMergeVerify, StatusRollingBack}
+
+// busyMergeStatuses — репозиторий занят очередью слияния: integration меняется строго по одной задаче.
+var busyMergeStatuses = []string{StatusMerging, StatusPostMergeVerify, StatusRollingBack}
 
 func WorkerCanMove(from, to string) bool {
 	for _, s := range workerTransitions[from] {
@@ -70,7 +83,7 @@ func WorkerCanMove(from, to string) bool {
 	return false
 }
 
-func IsFinal(s string) bool { return s == StatusDone || s == StatusCancelled }
+func IsFinal(s string) bool { return s == StatusDone || s == StatusCancelled || s == StatusRolledBack }
 
 // Политика повторов по классу ошибки (ТЗ п. 8.4).
 type retryDecision struct {
@@ -89,8 +102,6 @@ func decideRetry(class string, attempt, maxAttempts int, retryAfter *time.Durati
 	switch class {
 	case ClassAuth:
 		return retryDecision{status: StatusAwaitingHuman}
-	case ClassMerge:
-		return retryDecision{status: StatusReplan}
 	case ClassRateLimit:
 		d := defaultRateLimitWait
 		if retryAfter != nil && *retryAfter > 0 {
@@ -104,6 +115,8 @@ func decideRetry(class string, attempt, maxAttempts int, retryAfter *time.Durati
 		}
 		return retryDecision{status: StatusQueued, delay: transientWait, spendAttempt: true}
 	default:
+		// MERGE_CONFLICT и INTEGRATION_FAILURE — тоже сюда: задача переделывается поверх
+		// свежего integration (решение 7.3, вопрос 3), попытка тратится.
 		if attempt >= maxAttempts {
 			return retryDecision{status: StatusAwaitingHuman}
 		}

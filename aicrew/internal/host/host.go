@@ -74,6 +74,10 @@ func (h *Host) CleanupOrphans(ctx context.Context, repos []string) (removed []st
 		return nil, err
 	}
 	for _, repo := range repos {
+		// Временные worktree очереди слияния после перезапуска не нужны никогда.
+		for _, name := range gitx.ListTempWorktrees(repo) {
+			h.Git.RemoveTempWorktree(ctx, repo, name)
+		}
 		for _, id := range gitx.ListWorktreeTasks(repo) {
 			if !keep[id] {
 				if err := h.Git.RemoveWorktree(ctx, repo, id); err != nil {
@@ -121,7 +125,11 @@ func (h *Host) Process(parent context.Context, t *api.Task) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	r := &run{h: h, t: t, ctx: ctx, cancel: cancel}
-	log := h.Log.With("task", t.ID, "attempt", t.Attempt)
+	kind := t.Kind
+	if kind == "" {
+		kind = api.KindExecute
+	}
+	log := h.Log.With("task", t.ID, "attempt", t.Attempt, "kind", kind)
 	log.Info("task claimed", "title", t.Title)
 
 	// Heartbeat: продлевает lease и приносит отмену.
@@ -158,16 +166,28 @@ func (h *Host) Process(parent context.Context, t *api.Task) {
 		}
 	}()
 
-	err := r.pipeline()
+	var err error
+	switch kind {
+	case api.KindMerge:
+		err = r.merge()
+	case api.KindRollback:
+		err = r.rollback()
+	default:
+		err = r.pipeline()
+	}
 	cancel()
 	<-hbDone
-	r.finish(err, log)
+	r.finish(kind, err, log)
 }
 
 func (r *run) pipeline() error {
 	t, h := r.t, r.h
 	repo := t.Repository
-	path, base, err := h.Git.AddWorktree(r.ctx, repo.LocalPath, t.ID, repo.DefaultBranch)
+	// Задача начинается от integration: следующая видит результат предыдущей (7.3).
+	if err := h.Git.EnsureBranch(r.ctx, repo.LocalPath, repo.Integration(), repo.DefaultBranch); err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "integration_branch_failed", Message: err.Error()}
+	}
+	path, base, err := h.Git.AddWorktree(r.ctx, repo.LocalPath, t.ID, repo.Integration())
 	if err != nil {
 		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "worktree_failed", Message: err.Error()}
 	}
@@ -218,7 +238,8 @@ func (r *run) pipeline() error {
 		case rep.FailedKind == "test":
 			class = "TEST_FAILURE"
 		}
-		return &failureWithDetails{Failure: agent.Failure{Class: class, Code: "verification_failed", Message: lastStep(rep)}, details: rep}
+		return &failureWithDetails{Failure: agent.Failure{Class: class, Code: "verification_failed", Message: lastStep(rep)},
+			details: map[string]any{"verification": rep}}
 	}
 	if err := r.move("LLM_REVIEW", api.Facts{Details: map[string]any{"verification": rep}}); err != nil {
 		return err
@@ -227,19 +248,160 @@ func (r *run) pipeline() error {
 	return r.move("MERGEABLE", api.Facts{Reason: "LLM review is not enabled yet (stage 7.4)"})
 }
 
-type failureWithDetails struct {
-	agent.Failure
-	details any
+// ── очередь слияния (этап 7.3, docs/stage7-3-merge-queue.md) ──
+
+// merge сливает ветку задачи в integration во временном worktree, проверяет результат
+// слияния и только потом двигает integration. Иначе integration не меняется.
+func (r *run) merge() error {
+	t, h := r.t, r.h
+	repo := t.Repository
+	integ := repo.Integration()
+	branch := gitx.Branch(t.ID)
+	if err := h.Git.EnsureBranch(r.ctx, repo.LocalPath, integ, repo.DefaultBranch); err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "integration_branch_failed", Message: err.Error()}
+	}
+	old, err := h.Git.RevParse(r.ctx, repo.LocalPath, integ)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "integration_branch_failed", Message: err.Error()}
+	}
+	if _, err := h.Git.RevParse(r.ctx, repo.LocalPath, branch); err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "task_branch_missing", Message: err.Error()}
+	}
+	// Прошлый запуск успел сдвинуть integration, но не доложил (ПК выключили): просто досообщаем.
+	if h.Git.IsAncestor(r.ctx, repo.LocalPath, branch, integ) {
+		if err := r.move("MERGED", api.Facts{MergeCommit: old, Reason: "integration already contains the task"}); err != nil {
+			return err
+		}
+		return r.done()
+	}
+
+	name := "merge-" + t.ID
+	path, err := h.Git.AddTempWorktree(r.ctx, repo.LocalPath, name, old)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "worktree_failed", Message: err.Error()}
+	}
+	defer h.Git.RemoveTempWorktree(context.WithoutCancel(r.ctx), repo.LocalPath, name)
+
+	commit, conflicts, err := h.Git.Merge(r.ctx, path, branch, fmt.Sprintf("aicrew: merge %s (task %s)", t.Title, t.ID))
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "merge_failed", Message: err.Error()}
+	}
+	if len(conflicts) > 0 {
+		return &failureWithDetails{
+			Failure: agent.Failure{Class: "MERGE_CONFLICT", Code: "merge_conflict",
+				Message: "conflicts with changes merged meanwhile in: " + strings.Join(conflicts, ", ")},
+			details: map[string]any{"conflicted_files": conflicts, "integration": old}}
+	}
+	if err := r.move("POST_MERGE_VERIFY", api.Facts{Details: map[string]any{"merge_candidate": commit, "integration": old}}); err != nil {
+		return err
+	}
+	if err := r.verifyMerged(path, "merge"); err != nil {
+		return err
+	}
+	// Integration сдвигается только если её никто не тронул за время проверки.
+	if err := h.Git.AdvanceBranch(context.WithoutCancel(r.ctx), repo.LocalPath, integ, commit, old); err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "integration_moved", Message: err.Error()}
+	}
+	if err := r.move("MERGED", api.Facts{MergeCommit: commit}); err != nil {
+		return err
+	}
+	return r.done()
 }
 
-func (r *run) finish(err error, log *slog.Logger) {
+// done завершает слитую задачу: worktree и ветка задачи больше не нужны (история — в коммите слияния).
+func (r *run) done() error {
+	if err := r.h.Git.RemoveWorktree(context.WithoutCancel(r.ctx), r.t.Repository.LocalPath, r.t.ID); err != nil {
+		r.h.Log.Warn("remove worktree", "task", r.t.ID, "err", err)
+	}
+	return r.move("DONE", api.Facts{})
+}
+
+// rollback откатывает коммит слияния задачи (git revert -m 1) с той же проверкой.
+func (r *run) rollback() error {
+	t, h := r.t, r.h
+	repo := t.Repository
+	integ := repo.Integration()
+	if t.MergeCommit == "" {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "no_merge_commit", Message: "task has no merge commit"}
+	}
+	old, err := h.Git.RevParse(r.ctx, repo.LocalPath, integ)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "integration_branch_failed", Message: err.Error()}
+	}
+	name := "rollback-" + t.ID
+	path, err := h.Git.AddTempWorktree(r.ctx, repo.LocalPath, name, old)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "worktree_failed", Message: err.Error()}
+	}
+	defer h.Git.RemoveTempWorktree(context.WithoutCancel(r.ctx), repo.LocalPath, name)
+
+	commit, conflicts, err := h.Git.Revert(r.ctx, path, t.MergeCommit, fmt.Sprintf("aicrew: rollback %s (task %s)", t.Title, t.ID))
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "revert_failed", Message: err.Error()}
+	}
+	if len(conflicts) > 0 {
+		return &failureWithDetails{
+			Failure: agent.Failure{Class: "MERGE_CONFLICT", Code: "revert_conflict",
+				Message: "later changes touch the same lines: " + strings.Join(conflicts, ", ")},
+			details: map[string]any{"conflicted_files": conflicts}}
+	}
+	if err := r.verifyMerged(path, "rollback"); err != nil {
+		return err
+	}
+	if err := h.Git.AdvanceBranch(context.WithoutCancel(r.ctx), repo.LocalPath, integ, commit, old); err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "integration_moved", Message: err.Error()}
+	}
+	return r.move("ROLLED_BACK", api.Facts{RevertCommit: commit})
+}
+
+// verifyMerged гоняет профиль проверки на результате слияния или отката.
+func (r *run) verifyMerged(path, stage string) error {
+	t, h := r.t, r.h
+	profile, err := verify.ParseProfile(t.Repository.VerificationProfile)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "bad_profile", Message: err.Error()}
+	}
+	rep, err := h.Verifier.Run(r.ctx, profile, path, fmt.Sprintf("aicrew-verify-%s-%s-%d", stage, t.ID, t.Attempt),
+		time.Duration(t.VerifyRuntimeSec)*time.Second)
+	if user, lost := r.stopped(); user || lost {
+		return errStopped
+	}
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "verify_failed_to_run", Message: err.Error()}
+	}
+	if !rep.Passed {
+		class := "INTEGRATION_FAILURE"
+		if rep.TimedOut {
+			class = "TIMEOUT"
+		}
+		return &failureWithDetails{
+			Failure: agent.Failure{Class: class, Code: "post_" + stage + "_verification_failed",
+				Message: "together with changes merged meanwhile: " + lastStep(rep)},
+			details: map[string]any{"verification": rep, "stage": "post_" + stage}}
+	}
+	return nil
+}
+
+type failureWithDetails struct {
+	agent.Failure
+	details map[string]any
+}
+
+func (r *run) finish(kind string, err error, log *slog.Logger) {
 	t, h := r.t, r.h
 	ctx := context.WithoutCancel(r.ctx)
 	user, lost := r.stopped()
 	switch {
-	case err == nil:
+	case err == nil && kind == api.KindExecute:
 		log.Info("task ready to merge")
-		return // worktree остаётся до слияния (этап 7.3)
+		return // worktree остаётся до слияния
+	case err == nil:
+		log.Info("merge queue job done")
+		return
+	case lost && kind != api.KindExecute:
+		// Сервер вернёт слияние или откат в очередь; integration не сдвинута, worktree задачи нужен.
+		log.Warn("merge queue job taken away from this worker")
+		return
 	case lost:
 		log.Warn("task taken away from this worker")
 	case user:
@@ -254,12 +416,15 @@ func (r *run) finish(err error, log *slog.Logger) {
 		f := api.Facts{FailureClass: "AGENT_ERROR", FailureCode: "unexpected", Reason: err.Error()}
 		switch {
 		case errors.As(err, &fd):
-			f = api.Facts{FailureClass: fd.Class, FailureCode: fd.Code, Reason: fd.Message, Details: map[string]any{"verification": fd.details}}
+			f = api.Facts{FailureClass: fd.Class, FailureCode: fd.Code, Reason: fd.Message, Details: fd.details}
 		case errors.As(err, &fa):
 			f = api.Facts{FailureClass: fa.Class, FailureCode: fa.Code, Reason: fa.Message, RetryAfterSec: int(fa.RetryAfter.Seconds())}
 		}
 		status, terr := h.API.Transition(ctx, t.ID, h.WorkerID, t.Attempt, "FAILED", f)
 		log.Warn("task failed", "class", f.FailureClass, "code", f.FailureCode, "next", status, "err", terr)
+	}
+	if kind == api.KindRollback {
+		return // откат не удался — задача остаётся слитой, её ветки уже нет
 	}
 	// Провал или отмена до слияния — worktree удаляется (ТЗ п. 8.5).
 	if rerr := h.Git.RemoveWorktree(ctx, t.Repository.LocalPath, t.ID); rerr != nil {
@@ -280,10 +445,21 @@ func lessons(prev []api.PreviousAttempt) []string {
 		}
 		var facts struct {
 			Verification *verify.Report `json:"verification"`
+			Conflicts    []string       `json:"conflicted_files"`
+			Stage        string         `json:"stage"`
 		}
-		if json.Unmarshal(p.Facts, &facts) == nil && facts.Verification != nil {
-			if s := lastStep(*facts.Verification); s != "" {
-				line += ": " + s
+		if json.Unmarshal(p.Facts, &facts) == nil {
+			if len(facts.Conflicts) > 0 {
+				line += ": your result conflicted with other tasks merged meanwhile in " + strings.Join(facts.Conflicts, ", ") +
+					"; the worktree now starts from the updated code — redo the task on top of it and keep their changes"
+			}
+			if facts.Stage == "post_merge" {
+				line += ": checks failed only after merging with other tasks' changes — make the task work together with them"
+			}
+			if facts.Verification != nil {
+				if s := lastStep(*facts.Verification); s != "" {
+					line += ": " + s
+				}
 			}
 		}
 		out = append(out, line)

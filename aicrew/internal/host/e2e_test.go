@@ -161,4 +161,33 @@ func TestE2EHostAgainstRealServer(t *testing.T) {
 	if err != nil || !keep[first] || keep[second] {
 		t.Fatalf("keep: %v %v", keep, err)
 	}
+
+	// 5. Этап 7.3: «Слить» → очередь слияния → integration → DONE; main не тронута.
+	mainBefore := git(t, repoPath, "rev-parse", "main")
+	call(t, c, http.MethodPost, "/exec/tasks/"+first+"/merge", nil, nil)
+	base.Verifier = fakeVerifier{rep: verify.Report{Passed: true}}
+	tk, err = c.Claim(ctx, worker)
+	if err != nil || tk == nil || tk.ID != first || tk.Kind != api.KindMerge {
+		t.Fatalf("merge claim: %+v %v", tk, err)
+	}
+	base.Process(ctx, tk)
+	st = taskStatus(t, c, first)
+	integ := git(t, repoPath, "rev-parse", "aicrew/integration")
+	if st["status"] != "DONE" || st["merge_commit"] != integ || git(t, repoPath, "rev-parse", "main") != mainBefore {
+		t.Fatalf("merged task: %v (integration %s)", st, integ)
+	}
+
+	// 6. Откат через очередь: revert с проверкой, integration без задачи.
+	call(t, c, http.MethodPost, "/exec/tasks/"+first+"/rollback", map[string]string{"reason": "e2e"}, nil)
+	tk, _ = c.Claim(ctx, worker)
+	if tk == nil || tk.Kind != api.KindRollback || tk.MergeCommit != integ {
+		t.Fatalf("rollback claim: %+v", tk)
+	}
+	base.Process(ctx, tk)
+	if st := taskStatus(t, c, first); st["status"] != "ROLLED_BACK" {
+		t.Fatalf("rolled back: %v", st)
+	}
+	if _, ok := fileAt(t, repoPath, "aicrew/integration", "todo_list.dart"); ok {
+		t.Fatal("rollback must remove the task from integration")
+	}
 }

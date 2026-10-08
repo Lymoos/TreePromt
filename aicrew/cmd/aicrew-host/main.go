@@ -4,6 +4,7 @@
 //	aicrew-host set-claude-token   — сохранить токен `claude setup-token` (зашифрован DPAPI)
 //	aicrew-host add-repo …         — привязать локальный репозиторий к проекту PromptTree
 //	aicrew-host run                — брать и выполнять задачи
+//	aicrew-host promote -path …    — перенести integration-ветку в main (только человек)
 package main
 
 import (
@@ -56,7 +57,8 @@ func usage() {
   set-claude-token   сохранить токен из "claude setup-token" (ввод скрыт; -clipboard — взять из буфера обмена)
   check-claude-token проверить сохранённый токен (сам токен не выводится)
   add-repo           привязать локальный репозиторий: -project <id> -path <папка> [-name] [-branch] [-profile файл.json]
-  run                брать и выполнять задачи`)
+  run                брать и выполнять задачи, сливать проверенные в integration-ветку
+  promote            перенести integration в основную ветку после проверки: -path <папка>`)
 }
 
 type env struct {
@@ -259,6 +261,12 @@ func dispatch(cmd string, args []string) error {
 
 	case "run":
 		return runHost(ctx, e)
+
+	case "promote":
+		fs := flag.NewFlagSet("promote", flag.ExitOnError)
+		path := fs.String("path", "", "папка репозитория")
+		_ = fs.Parse(args)
+		return promote(ctx, e, *path)
 	}
 	usage()
 	return fmt.Errorf("неизвестная команда %q", cmd)
@@ -309,6 +317,70 @@ func runHost(ctx context.Context, e *env) error {
 	}
 	log.Info("aicrew-host started", "host", h.ID, "worker", workerID, "repositories", len(paths), "orphans_removed", len(removed))
 	return hst.Run(ctx)
+}
+
+// promote переносит integration-ветку в основную (решение 7.3: это делает только человек).
+// Перед переносом integration ещё раз проходит проверку; main двигается только перемоткой.
+func promote(ctx context.Context, e *env, path string) error {
+	if e.client == nil {
+		return api.ErrAuthRequired
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil || path == "" {
+		return errors.New("нужен -path <папка репозитория>")
+	}
+	repos, err := e.client.ListRepositories(ctx)
+	if err != nil {
+		return err
+	}
+	var repo *api.Repository
+	for i := range repos {
+		if strings.EqualFold(filepath.Clean(repos[i].LocalPath), filepath.Clean(abs)) {
+			repo = &repos[i].Repository
+			break
+		}
+	}
+	if repo == nil {
+		return fmt.Errorf("%s не привязан к AiCrew (add-repo)", abs)
+	}
+	run := runner.New("git", "docker")
+	g := gitx.Git{R: run}
+	integ := repo.Integration()
+	head, err := g.RevParse(ctx, abs, integ)
+	if err != nil {
+		return fmt.Errorf("ветки %s нет: AiCrew ещё ничего не слил", integ)
+	}
+	if g.IsAncestor(ctx, abs, head, repo.DefaultBranch) {
+		fmt.Printf("%s уже содержит всё из %s — переносить нечего.\n", repo.DefaultBranch, integ)
+		return nil
+	}
+
+	profile, err := verify.ParseProfile(repo.VerificationProfile)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Проверка %s (%s)…\n", integ, head[:12])
+	tmp, err := g.AddTempWorktree(ctx, abs, "promote-check", head)
+	if err != nil {
+		return err
+	}
+	defer g.RemoveTempWorktree(context.WithoutCancel(ctx), abs, "promote-check")
+	rep, err := verify.Verifier{R: run, DefaultImage: e.cfg.AgentImage}.Run(ctx, profile, tmp, "aicrew-verify-promote", 20*time.Minute)
+	if err != nil {
+		return err
+	}
+	for _, s := range rep.Steps {
+		fmt.Printf("  %s: exit %d (%d с)\n", s.Name, s.ExitCode, s.Seconds)
+	}
+	if !rep.Passed {
+		return fmt.Errorf("%s не прошла проверку — %s не тронута", integ, repo.DefaultBranch)
+	}
+	from, to, err := g.FastForward(ctx, abs, repo.DefaultBranch, head)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s: %s → %s\n", repo.DefaultBranch, from[:12], to[:12])
+	return nil
 }
 
 var (

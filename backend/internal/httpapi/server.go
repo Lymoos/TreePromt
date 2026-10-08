@@ -65,6 +65,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/exec/tasks", s.authed(s.handleExecListTasks))
 	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/cancel", s.authed(s.handleExecCancel))
 	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/retry", s.authed(s.handleExecRetry))
+	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/merge", s.authed(s.handleExecMerge))
+	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/rollback", s.authed(s.handleExecRollback))
 	mux.HandleFunc("POST /api/v1/exec/claim", s.authed(s.handleExecClaim))
 	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/heartbeat", s.authed(s.handleExecHeartbeat))
 	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/transition", s.authed(s.handleExecTransition))

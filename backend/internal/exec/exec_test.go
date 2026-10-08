@@ -20,6 +20,8 @@ func TestTransitionTable(t *testing.T) {
 	allowed := [][2]string{
 		{StatusClaimed, StatusInProgress}, {StatusInProgress, StatusVerifying}, {StatusVerifying, StatusLLMReview},
 		{StatusLLMReview, StatusMergeable}, {StatusInProgress, StatusFailed}, {StatusCancelling, StatusCancelled},
+		{StatusMerging, StatusPostMergeVerify}, {StatusPostMergeVerify, StatusMerged}, {StatusMerged, StatusDone},
+		{StatusRollingBack, StatusRolledBack},
 	}
 	for _, p := range allowed {
 		if !WorkerCanMove(p[0], p[1]) {
@@ -30,6 +32,9 @@ func TestTransitionTable(t *testing.T) {
 		{StatusQueued, StatusInProgress}, {StatusClaimed, StatusMergeable}, {StatusInProgress, StatusDone},
 		{StatusVerifying, StatusMergeable}, {StatusDone, StatusQueued}, {StatusCancelled, StatusInProgress},
 		{StatusCancelling, StatusVerifying},
+		// Сливать может только очередь: воркер не двигает MERGEABLE сам и не пропускает проверку слияния.
+		{StatusMergeable, StatusMerged}, {StatusMergeable, StatusMergeQueued}, {StatusMerged, StatusPostMergeVerify},
+		{StatusRolledBack, StatusDone},
 	}
 	for _, p := range forbidden {
 		if WorkerCanMove(p[0], p[1]) {
@@ -47,7 +52,8 @@ func TestRetryPolicy(t *testing.T) {
 		spend   bool
 	}{
 		{ClassAuth, 1, StatusAwaitingHuman, false, false},
-		{ClassMerge, 1, StatusReplan, false, false},
+		{ClassMerge, 1, StatusQueued, false, true}, // 7.3: конфликт → переделать поверх integration
+		{ClassIntegration, 3, StatusAwaitingHuman, false, false},
 		{ClassRateLimit, 3, StatusQueued, true, false},
 		{ClassNetwork, 1, StatusQueued, true, true},
 		{ClassTest, 1, StatusQueued, false, true},

@@ -180,6 +180,7 @@ type Repository struct {
 	Name                string          `json:"name"`
 	LocalPath           string          `json:"local_path"`
 	DefaultBranch       string          `json:"default_branch"`
+	IntegrationBranch   string          `json:"integration_branch"`
 	VerificationProfile json.RawMessage `json:"verification_profile"`
 }
 
@@ -191,7 +192,15 @@ type PreviousAttempt struct {
 	Facts        json.RawMessage `json:"facts"`
 }
 
+// Виды работы, которые выдаёт сервер (этап 7.3).
+const (
+	KindExecute  = "execute"
+	KindMerge    = "merge"
+	KindRollback = "rollback"
+)
+
 type Task struct {
+	Kind             string            `json:"kind"`
 	ID               string            `json:"id"`
 	Attempt          int               `json:"attempt"`
 	Title            string            `json:"title"`
@@ -201,6 +210,15 @@ type Task struct {
 	VerifyRuntimeSec int               `json:"verification_runtime_sec"`
 	Repository       Repository        `json:"repository"`
 	PreviousAttempts []PreviousAttempt `json:"previous_attempts"`
+	MergeCommit      string            `json:"merge_commit"`
+}
+
+// Integration — ветка, в которую AiCrew сливает результаты (никогда не main).
+func (r Repository) Integration() string {
+	if r.IntegrationBranch != "" {
+		return r.IntegrationBranch
+	}
+	return "aicrew/integration"
 }
 
 // Claim — nil, если работы нет.
@@ -225,6 +243,8 @@ func (c *Client) Heartbeat(ctx context.Context, taskID, workerID string, attempt
 type Facts struct {
 	BaseCommit    string `json:"base_commit,omitempty"`
 	ResultCommit  string `json:"result_commit,omitempty"`
+	MergeCommit   string `json:"merge_commit,omitempty"`
+	RevertCommit  string `json:"revert_commit,omitempty"`
 	FailureCode   string `json:"failure_code,omitempty"`
 	FailureClass  string `json:"failure_class,omitempty"`
 	RetryAfterSec int    `json:"retry_after_sec,omitempty"`

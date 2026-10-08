@@ -139,6 +139,38 @@ func (s *Server) handleExecRetry(w http.ResponseWriter, r *http.Request, id core
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleExecMerge — «Слить»: проверенная задача встаёт в очередь слияния в integration (этап 7.3).
+func (s *Server) handleExecMerge(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	taskID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.exec.Merge(r.Context(), id.UserID, taskID); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleExecRollback — «Откатить»: revert слияния задачи через очередь, с проверкой.
+func (s *Server) handleExecRollback(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	taskID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if r.ContentLength > 0 && !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.exec.Rollback(r.Context(), id.UserID, taskID, req.Reason); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ── протокол хоста ──
 
 func (s *Server) handleExecClaim(w http.ResponseWriter, r *http.Request, id core.Identity) {

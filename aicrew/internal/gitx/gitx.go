@@ -39,6 +39,11 @@ func WorktreePath(repo, taskID string) string {
 
 func Branch(taskID string) string { return "aicrew/task-" + taskID }
 
+// TempWorktreePath — временный worktree очереди слияния (merge-<id>, rollback-<id>, promote-…).
+func TempWorktreePath(repo, name string) string {
+	return filepath.Join(repo, WorktreeDir, name)
+}
+
 // AddWorktree создаёт чистый worktree задачи от HEAD основной ветки и возвращает base_commit.
 // Остатки прошлой попытки удаляются: каждая попытка начинается с чистого листа.
 func (g Git) AddWorktree(ctx context.Context, repo, taskID, baseBranch string) (path, base string, err error) {
@@ -140,4 +145,142 @@ func (g Git) Autocommit(ctx context.Context, worktree, base, message string) (Fa
 	}
 	f.DiffStat, err = g.run(ctx, worktree, "diff", "--stat", base, head)
 	return f, err
+}
+
+// ── очередь слияния (этап 7.3) ──
+
+func (g Git) RevParse(ctx context.Context, repo, ref string) (string, error) {
+	return g.run(ctx, repo, "rev-parse", "--verify", ref+"^{commit}")
+}
+
+// EnsureBranch создаёт ветку от from, если её ещё нет (integration-ветка при первом запуске).
+func (g Git) EnsureBranch(ctx context.Context, repo, branch, from string) error {
+	if _, err := g.RevParse(ctx, repo, "refs/heads/"+branch); err == nil {
+		return nil
+	}
+	_, err := g.run(ctx, repo, "branch", branch, from)
+	return err
+}
+
+// IsAncestor — содержится ли коммит a в истории b.
+func (g Git) IsAncestor(ctx context.Context, repo, a, b string) bool {
+	_, err := g.run(ctx, repo, "merge-base", "--is-ancestor", a, b)
+	return err == nil
+}
+
+// AddTempWorktree — отдельный detached worktree на коммите: слияние и откат не трогают
+// ни checkout пользователя, ни саму integration-ветку, пока проверка не пройдёт.
+func (g Git) AddTempWorktree(ctx context.Context, repo, name, commit string) (string, error) {
+	path := TempWorktreePath(repo, name)
+	g.RemoveTempWorktree(ctx, repo, name)
+	if err := g.ensureIgnored(repo); err != nil {
+		return "", err
+	}
+	if _, err := g.run(ctx, repo, "worktree", "add", "--detach", path, commit); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (g Git) RemoveTempWorktree(ctx context.Context, repo, name string) {
+	path := TempWorktreePath(repo, name)
+	if _, err := g.run(ctx, repo, "worktree", "remove", "--force", path); err != nil {
+		_ = os.RemoveAll(path)
+		_, _ = g.run(ctx, repo, "worktree", "prune")
+	}
+}
+
+// ListTempWorktrees — временные worktree очереди слияния; после перезапуска хоста все они мусор.
+func ListTempWorktrees(repo string) []string {
+	entries, _ := os.ReadDir(filepath.Join(repo, WorktreeDir))
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), "task-") {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+// unmerged — файлы с конфликтом после неудачного merge/revert.
+func (g Git) unmerged(ctx context.Context, worktree string) []string {
+	out, _ := g.run(ctx, worktree, "diff", "--name-only", "--diff-filter=U")
+	var files []string
+	for _, f := range strings.Split(out, "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			files = append(files, f)
+		}
+	}
+	return files
+}
+
+// Merge сливает ветку в HEAD временного worktree отдельным коммитом слияния (--no-ff),
+// чтобы задачу можно было откатить целиком. При конфликте слияние отменяется
+// и возвращается список конфликтных файлов.
+func (g Git) Merge(ctx context.Context, worktree, branch, message string) (commit string, conflicts []string, err error) {
+	if _, err = g.run(ctx, worktree, "merge", "--no-ff", "--no-verify", "-m", message, branch); err != nil {
+		if conflicts = g.unmerged(ctx, worktree); len(conflicts) > 0 {
+			_, _ = g.run(ctx, worktree, "merge", "--abort")
+			return "", conflicts, nil
+		}
+		return "", nil, err
+	}
+	commit, err = g.run(ctx, worktree, "rev-parse", "HEAD")
+	return commit, nil, err
+}
+
+// Revert откатывает коммит слияния задачи (-m 1: относительно integration до слияния).
+func (g Git) Revert(ctx context.Context, worktree, mergeCommit, message string) (commit string, conflicts []string, err error) {
+	if _, err = g.run(ctx, worktree, "revert", "--no-edit", "-m", "1", mergeCommit); err != nil {
+		if conflicts = g.unmerged(ctx, worktree); len(conflicts) > 0 {
+			_, _ = g.run(ctx, worktree, "revert", "--abort")
+			return "", conflicts, nil
+		}
+		return "", nil, err
+	}
+	if message != "" {
+		if _, err = g.run(ctx, worktree, "commit", "--amend", "--no-verify", "-m", message); err != nil {
+			return "", nil, err
+		}
+	}
+	commit, err = g.run(ctx, worktree, "rev-parse", "HEAD")
+	return commit, nil, err
+}
+
+// AdvanceBranch переводит ветку на commit, только если она всё ещё указывает на old
+// (атомарно, compare-and-swap): integration не перескочит через чужое изменение.
+func (g Git) AdvanceBranch(ctx context.Context, repo, branch, commit, old string) error {
+	_, err := g.run(ctx, repo, "update-ref", "refs/heads/"+branch, commit, old)
+	return err
+}
+
+// FastForward переносит ветку target на source только перемоткой (integration → main).
+// Если target выгружена в рабочую папку пользователя, папка должна быть чистой: тогда
+// используется git merge --ff-only, и файлы обновляются вместе с веткой.
+func (g Git) FastForward(ctx context.Context, repo, target, source string) (from, to string, err error) {
+	if from, err = g.RevParse(ctx, repo, target); err != nil {
+		return "", "", err
+	}
+	if to, err = g.RevParse(ctx, repo, source); err != nil {
+		return "", "", err
+	}
+	if from == to {
+		return from, to, nil
+	}
+	if !g.IsAncestor(ctx, repo, from, to) {
+		return "", "", fmt.Errorf("%s has commits that %s does not have: fast-forward is impossible, merge by hand", target, source)
+	}
+	current, _ := g.run(ctx, repo, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if current != target {
+		return from, to, g.AdvanceBranch(ctx, repo, target, to, from)
+	}
+	status, err := g.run(ctx, repo, "status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return "", "", err
+	}
+	if status != "" {
+		return "", "", fmt.Errorf("%s is checked out and has uncommitted changes: commit or stash them first", target)
+	}
+	_, err = g.run(ctx, repo, "merge", "--ff-only", source)
+	return from, to, err
 }

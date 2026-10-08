@@ -135,6 +135,7 @@ type Repository struct {
 	Name                string          `json:"name"`
 	LocalPath           string          `json:"local_path"`
 	DefaultBranch       string          `json:"default_branch"`
+	IntegrationBranch   string          `json:"integration_branch"`
 	VerificationProfile json.RawMessage `json:"verification_profile"`
 }
 
@@ -160,6 +161,12 @@ func (s *Service) CreateRepository(ctx context.Context, userID uuid.UUID, r Repo
 	if r.DefaultBranch == "" {
 		r.DefaultBranch = "main"
 	}
+	if r.IntegrationBranch == "" {
+		r.IntegrationBranch = "aicrew/integration"
+	}
+	if r.IntegrationBranch == r.DefaultBranch {
+		return r, ErrInvalid // AiCrew не пишет в основную ветку (7.3)
+	}
 	if len(r.VerificationProfile) == 0 {
 		r.VerificationProfile = json.RawMessage(`{}`)
 	}
@@ -176,8 +183,10 @@ func (s *Service) CreateRepository(ctx context.Context, userID uuid.UUID, r Repo
 		return r, ErrNotFound
 	}
 	r.ID = uuid.Must(uuid.NewV7())
-	if _, err := tx.Exec(ctx, `INSERT INTO exec.repositories (id, project_id, host_id, name, local_path, default_branch, verification_profile)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`, r.ID, r.ProjectID, r.HostID, r.Name, r.LocalPath, r.DefaultBranch, r.VerificationProfile); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO exec.repositories (id, project_id, host_id, name, local_path, default_branch,
+			integration_branch, verification_profile)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, r.ID, r.ProjectID, r.HostID, r.Name, r.LocalPath, r.DefaultBranch,
+		r.IntegrationBranch, r.VerificationProfile); err != nil {
 		return r, err
 	}
 	return r, tx.Commit(ctx)
@@ -294,6 +303,8 @@ func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) 
 
 // ClaimedTask — всё, что нужно хосту для выполнения.
 type ClaimedTask struct {
+	// Kind — что делать: execute (агент и проверка), merge (слить в integration), rollback (откатить слияние).
+	Kind             string         `json:"kind"`
 	ID               uuid.UUID      `json:"id"`
 	Attempt          int            `json:"attempt"`
 	Title            string         `json:"title"`
@@ -304,7 +315,14 @@ type ClaimedTask struct {
 	VerifyRuntimeSec int            `json:"verification_runtime_sec"`
 	Repository       Repository     `json:"repository"`
 	PreviousAttempts []AttemptFacts `json:"previous_attempts"`
+	MergeCommit      string         `json:"merge_commit,omitempty"` // для rollback
 }
+
+const (
+	KindExecute  = "execute"
+	KindMerge    = "merge"
+	KindRollback = "rollback"
+)
 
 type AttemptFacts struct {
 	Attempt      int             `json:"attempt"`
@@ -331,9 +349,21 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		return nil, err
 	}
 	now := s.now()
-	var t ClaimedTask
+	// Сначала очередь слияния: integration должна продвинуться раньше, чем начнётся следующая задача.
+	job, err := s.claimMergeJob(ctx, tx, hostID, workerID, now)
+	if err != nil {
+		return nil, err
+	}
+	if job != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		s.notify(id.UserID)
+		return job, nil
+	}
+	t := ClaimedTask{Kind: KindExecute}
 	err = tx.QueryRow(ctx, `SELECT t.id, t.attempt, t.title, t.prompt, t.execution_env, t.agent_runtime_sec, t.verification_runtime_sec,
-			r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.verification_profile
+			r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
 		FROM exec.tasks t
 		JOIN exec.repositories r ON r.id = t.repository_id
 		JOIN exec.hosts h ON h.id = r.host_id
@@ -349,7 +379,7 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		FOR UPDATE OF t SKIP LOCKED`, hostID, now).
 		Scan(&t.ID, &t.Attempt, &t.Title, &t.Prompt, &t.ExecutionEnv, &t.AgentRuntimeSec, &t.VerifyRuntimeSec,
 			&t.Repository.ID, &t.Repository.ProjectID, &t.Repository.HostID, &t.Repository.Name, &t.Repository.LocalPath,
-			&t.Repository.DefaultBranch, &t.Repository.VerificationProfile)
+			&t.Repository.DefaultBranch, &t.Repository.IntegrationBranch, &t.Repository.VerificationProfile)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -397,6 +427,73 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 	return &t, nil
 }
 
+// claimMergeJob берёт слияние или откат на репозитории хоста. Строка репозитория блокируется,
+// поэтому integration одного репозитория меняет строго одна задача за раз.
+func (s *Service) claimMergeJob(ctx context.Context, tx pgx.Tx, hostID, workerID uuid.UUID, now time.Time) (*ClaimedTask, error) {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT t.repository_id FROM exec.tasks t JOIN exec.repositories r ON r.id = t.repository_id
+		WHERE r.host_id = $1 AND t.status IN ('MERGE_QUEUED', 'ROLLBACK_QUEUED')`, hostID)
+	if err != nil {
+		return nil, err
+	}
+	repos, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, err
+	}
+	for _, repoID := range repos {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM exec.repositories WHERE id = $1 FOR UPDATE`, repoID); err != nil {
+			return nil, err
+		}
+		var busy bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM exec.tasks WHERE repository_id = $1 AND status = ANY($2))`,
+			repoID, busyMergeStatuses).Scan(&busy); err != nil {
+			return nil, err
+		}
+		if busy {
+			continue
+		}
+		var t ClaimedTask
+		var status string
+		var merge *string
+		err := tx.QueryRow(ctx, `SELECT t.id, t.attempt, t.title, t.status, t.merge_commit, t.verification_runtime_sec,
+				r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
+			FROM exec.tasks t JOIN exec.repositories r ON r.id = t.repository_id
+			WHERE t.repository_id = $1 AND t.status IN ('MERGE_QUEUED', 'ROLLBACK_QUEUED')
+			ORDER BY t.updated_at LIMIT 1 FOR UPDATE OF t`, repoID).
+			Scan(&t.ID, &t.Attempt, &t.Title, &status, &merge, &t.VerifyRuntimeSec,
+				&t.Repository.ID, &t.Repository.ProjectID, &t.Repository.HostID, &t.Repository.Name, &t.Repository.LocalPath,
+				&t.Repository.DefaultBranch, &t.Repository.IntegrationBranch, &t.Repository.VerificationProfile)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		to := StatusMerging
+		t.Kind = KindMerge
+		if status == StatusRollbackQueued {
+			to, t.Kind = StatusRollingBack, KindRollback
+			if merge != nil {
+				t.MergeCommit = *merge
+			}
+		}
+		t.LeaseExpiresAt = now.Add(LeaseTTL)
+		t.PreviousAttempts = []AttemptFacts{}
+		if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET status = $2, worker_id = $3, lease_expires_at = $4, heartbeat_at = $5,
+				failure_code = NULL, failure_class = NULL, retryable = NULL, updated_at = now()
+			WHERE id = $1`, t.ID, to, workerID, t.LeaseExpiresAt, now); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE exec.workers SET status = 'busy', heartbeat_at = now() WHERE id = $1`, workerID); err != nil {
+			return nil, err
+		}
+		if err := event(ctx, tx, t.ID, &status, to, "worker:"+workerID.String(), "", &t.Attempt); err != nil {
+			return nil, err
+		}
+		return &t, nil
+	}
+	return nil, nil
+}
+
 type leasedTask struct {
 	status    string
 	workerID  *uuid.UUID
@@ -404,12 +501,13 @@ type leasedTask struct {
 	maxAtt    int
 	createdBy uuid.UUID
 	cancel    bool
+	mode      string
 }
 
 func lockTask(ctx context.Context, tx pgx.Tx, taskID uuid.UUID) (leasedTask, error) {
 	var t leasedTask
-	err := tx.QueryRow(ctx, `SELECT status, worker_id, attempt, max_attempts, created_by, cancel_requested
-		FROM exec.tasks WHERE id = $1 FOR UPDATE`, taskID).Scan(&t.status, &t.workerID, &t.attempt, &t.maxAtt, &t.createdBy, &t.cancel)
+	err := tx.QueryRow(ctx, `SELECT status, worker_id, attempt, max_attempts, created_by, cancel_requested, execution_mode
+		FROM exec.tasks WHERE id = $1 FOR UPDATE`, taskID).Scan(&t.status, &t.workerID, &t.attempt, &t.maxAtt, &t.createdBy, &t.cancel, &t.mode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -461,6 +559,8 @@ func leased(status string) bool {
 type Facts struct {
 	BaseCommit    string          `json:"base_commit,omitempty"`
 	ResultCommit  string          `json:"result_commit,omitempty"`
+	MergeCommit   string          `json:"merge_commit,omitempty"`
+	RevertCommit  string          `json:"revert_commit,omitempty"`
 	FailureCode   string          `json:"failure_code,omitempty"`
 	FailureClass  string          `json:"failure_class,omitempty"`
 	RetryAfterSec int             `json:"retry_after_sec,omitempty"`
@@ -504,6 +604,16 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 			return "", err
 		}
 	}
+	if f.MergeCommit != "" {
+		if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET merge_commit = $2 WHERE id = $1`, taskID, f.MergeCommit); err != nil {
+			return "", err
+		}
+	}
+	if f.RevertCommit != "" {
+		if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET revert_commit = $2 WHERE id = $1`, taskID, f.RevertCommit); err != nil {
+			return "", err
+		}
+	}
 	details := f.Details
 	if len(details) == 0 {
 		details = json.RawMessage(`{}`)
@@ -516,8 +626,24 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 	}
 
 	final := to
-	switch to {
-	case StatusFailed:
+	switch {
+	case to == StatusFailed && t.status == StatusRollingBack:
+		// Откат не удался: integration не тронута, задача остаётся слитой (DONE) с пометкой.
+		if !ValidClass(f.FailureClass) {
+			return "", fmt.Errorf("%w: unknown failure class %q", ErrInvalid, f.FailureClass)
+		}
+		if err := s.release(ctx, tx, taskID, StatusDone, workerID); err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET failure_class = $2, failure_code = 'rollback_failed' WHERE id = $1`,
+			taskID, f.FailureClass); err != nil {
+			return "", err
+		}
+		if err := event(ctx, tx, taskID, &t.status, StatusDone, actor, "rollback failed: "+f.FailureClass+": "+f.Reason, &attempt); err != nil {
+			return "", err
+		}
+		final = StatusDone
+	case to == StatusFailed:
 		if !ValidClass(f.FailureClass) {
 			return "", fmt.Errorf("%w: unknown failure class %q", ErrInvalid, f.FailureClass)
 		}
@@ -530,7 +656,7 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 		if err != nil {
 			return "", err
 		}
-	case StatusCancelled:
+	case to == StatusCancelled:
 		if err := s.release(ctx, tx, taskID, StatusCancelled, workerID); err != nil {
 			return "", err
 		}
@@ -549,6 +675,13 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 		}
 		if err := event(ctx, tx, taskID, &t.status, to, actor, f.Reason, &attempt); err != nil {
 			return "", err
+		}
+		// semi_auto и night: проверенный результат сам встаёт в очередь слияния; manual ждёт «Слить».
+		if to == StatusMergeable && t.mode != "manual" {
+			if err := s.queueMerge(ctx, tx, taskID, "system", "auto merge: "+t.mode); err != nil {
+				return "", err
+			}
+			final = StatusMergeQueued
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -658,7 +791,19 @@ func (s *Service) reapOne(ctx context.Context, taskID uuid.UUID) (bool, error) {
 	if lease == nil || !lease.Before(s.now()) || !leased(t.status) {
 		return false, nil // heartbeat успел
 	}
-	if t.status == StatusCancelling {
+	if back := requeueAfterLostLease(t.status); back != "" {
+		// Слияние или откат прерваны до сдвига integration: просто ставим обратно в очередь.
+		var w uuid.UUID
+		if t.workerID != nil {
+			w = *t.workerID
+		}
+		if err := s.release(ctx, tx, taskID, back, w); err != nil {
+			return false, err
+		}
+		if err := event(ctx, tx, taskID, &t.status, back, "system", "lease expired during merge queue work", &t.attempt); err != nil {
+			return false, err
+		}
+	} else if t.status == StatusCancelling {
 		var w uuid.UUID
 		if t.workerID != nil {
 			w = *t.workerID
@@ -677,6 +822,16 @@ func (s *Service) reapOne(ctx context.Context, taskID uuid.UUID) (bool, error) {
 	}
 	s.notify(t.createdBy)
 	return true, nil
+}
+
+func requeueAfterLostLease(status string) string {
+	switch status {
+	case StatusMerging, StatusPostMergeVerify:
+		return StatusMergeQueued
+	case StatusRollingBack:
+		return StatusRollbackQueued
+	}
+	return ""
 }
 
 // RunReaper запускает сборщик раз в interval до отмены контекста.
@@ -712,8 +867,24 @@ func (s *Service) Cancel(ctx context.Context, userID, taskID uuid.UUID) (string,
 	if err := s.requireTaskWrite(ctx, tx, userID, taskID); err != nil {
 		return "", err
 	}
-	if IsFinal(t.status) {
+	switch {
+	case IsFinal(t.status), t.status == StatusMerged:
 		return t.status, nil
+	case t.status == StatusRollingBack:
+		return "", fmt.Errorf("%w: rollback is already running", ErrBadTransition)
+	case t.status == StatusRollbackQueued:
+		// Отмена отката: задача остаётся слитой.
+		if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET status = 'DONE', updated_at = now() WHERE id = $1`, taskID); err != nil {
+			return "", err
+		}
+		if err := event(ctx, tx, taskID, &t.status, StatusDone, "user:"+userID.String(), "rollback cancelled by user", nil); err != nil {
+			return "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		s.notify(userID)
+		return StatusDone, nil
 	}
 	to := StatusCancelling
 	if !leased(t.status) {
@@ -769,6 +940,95 @@ func (s *Service) Retry(ctx context.Context, userID, taskID uuid.UUID) error {
 	return nil
 }
 
+func (s *Service) queueMerge(ctx context.Context, tx pgx.Tx, taskID uuid.UUID, actor, reason string) error {
+	if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET status = 'MERGE_QUEUED', updated_at = now() WHERE id = $1`, taskID); err != nil {
+		return err
+	}
+	return event(ctx, tx, taskID, strp(StatusMergeable), StatusMergeQueued, actor, reason, nil)
+}
+
+// Merge — пользователь одобряет слияние проверенной задачи в integration-ветку (режим manual).
+func (s *Service) Merge(ctx context.Context, userID, taskID uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	t, err := lockTask(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if err := s.requireTaskWrite(ctx, tx, userID, taskID); err != nil {
+		return err
+	}
+	if t.status != StatusMergeable {
+		return fmt.Errorf("%w: %s → %s", ErrBadTransition, t.status, StatusMergeQueued)
+	}
+	if err := s.queueMerge(ctx, tx, taskID, "user:"+userID.String(), "merge approved"); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.notify(userID)
+	return nil
+}
+
+// Rollback — пользователь откатывает слитую задачу. Откат идёт через очередь слияния
+// с проверкой. Нельзя откатить задачу, на которую опираются уже слитые задачи.
+func (s *Service) Rollback(ctx context.Context, userID, taskID uuid.UUID, reason string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	t, err := lockTask(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if err := s.requireTaskWrite(ctx, tx, userID, taskID); err != nil {
+		return err
+	}
+	if t.status != StatusDone {
+		return fmt.Errorf("%w: %s → %s", ErrBadTransition, t.status, StatusRollbackQueued)
+	}
+	var merge *string
+	if err := tx.QueryRow(ctx, `SELECT merge_commit FROM exec.tasks WHERE id = $1`, taskID).Scan(&merge); err != nil {
+		return err
+	}
+	if merge == nil || *merge == "" {
+		return fmt.Errorf("%w: task was not merged by the queue", ErrBadTransition)
+	}
+	rows, err := tx.Query(ctx, `SELECT t.title FROM exec.task_dependencies d JOIN exec.tasks t ON t.id = d.task_id
+		WHERE d.depends_on_task_id = $1 AND t.status IN ('MERGE_QUEUED', 'MERGING', 'POST_MERGE_VERIFY', 'MERGED', 'DONE',
+			'ROLLBACK_QUEUED', 'ROLLING_BACK') ORDER BY t.created_at`, taskID)
+	if err != nil {
+		return err
+	}
+	dependents, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	if len(dependents) > 0 {
+		return fmt.Errorf("%w: roll back dependent tasks first: %s", ErrBadTransition, strings.Join(dependents, "; "))
+	}
+	if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET status = 'ROLLBACK_QUEUED', failure_class = NULL, failure_code = NULL,
+			updated_at = now() WHERE id = $1`, taskID); err != nil {
+		return err
+	}
+	if reason == "" {
+		reason = "rollback requested"
+	}
+	if err := event(ctx, tx, taskID, &t.status, StatusRollbackQueued, "user:"+userID.String(), reason, nil); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.notify(userID)
+	return nil
+}
+
 func (s *Service) requireTaskWrite(ctx context.Context, tx pgx.Tx, userID, taskID uuid.UUID) error {
 	var projectID uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT project_id FROM exec.tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
@@ -792,13 +1052,16 @@ type TaskView struct {
 	FailureCode  *string    `json:"failure_code"`
 	BaseCommit   *string    `json:"base_commit"`
 	ResultCommit *string    `json:"result_commit"`
+	MergeCommit  *string    `json:"merge_commit"`
+	Mode         string     `json:"execution_mode"`
 	RetryAfter   *time.Time `json:"retry_after"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 func (s *Service) ListTasks(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID) ([]TaskView, error) {
 	rows, err := s.pool.Query(ctx, `SELECT t.id, t.project_id, t.node_id, t.repository_id, t.title, t.status, t.attempt,
-			t.max_attempts, t.failure_class, t.failure_code, t.base_commit, t.result_commit, t.retry_after, t.updated_at
+			t.max_attempts, t.failure_class, t.failure_code, t.base_commit, t.result_commit, t.merge_commit, t.execution_mode,
+			t.retry_after, t.updated_at
 		FROM exec.tasks t JOIN core.project_access a ON a.project_id = t.project_id AND a.user_id = $1
 		WHERE ($2::uuid IS NULL OR t.project_id = $2) ORDER BY t.updated_at DESC LIMIT 500`, userID, projectID)
 	if err != nil {
@@ -807,13 +1070,14 @@ func (s *Service) ListTasks(ctx context.Context, userID uuid.UUID, projectID *uu
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (TaskView, error) {
 		var v TaskView
 		err := r.Scan(&v.ID, &v.ProjectID, &v.NodeID, &v.RepositoryID, &v.Title, &v.Status, &v.Attempt, &v.MaxAttempts,
-			&v.FailureClass, &v.FailureCode, &v.BaseCommit, &v.ResultCommit, &v.RetryAfter, &v.UpdatedAt)
+			&v.FailureClass, &v.FailureCode, &v.BaseCommit, &v.ResultCommit, &v.MergeCommit, &v.Mode, &v.RetryAfter, &v.UpdatedAt)
 		return v, err
 	})
 }
 
 func (s *Service) ListRepositories(ctx context.Context, userID uuid.UUID) ([]Repository, error) {
-	rows, err := s.pool.Query(ctx, `SELECT r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.verification_profile
+	rows, err := s.pool.Query(ctx, `SELECT r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch,
+			r.verification_profile
 		FROM exec.repositories r JOIN core.project_access a ON a.project_id = r.project_id AND a.user_id = $1
 		ORDER BY r.created_at`, userID)
 	if err != nil {
@@ -821,18 +1085,18 @@ func (s *Service) ListRepositories(ctx context.Context, userID uuid.UUID) ([]Rep
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Repository, error) {
 		var v Repository
-		err := r.Scan(&v.ID, &v.ProjectID, &v.HostID, &v.Name, &v.LocalPath, &v.DefaultBranch, &v.VerificationProfile)
+		err := r.Scan(&v.ID, &v.ProjectID, &v.HostID, &v.Name, &v.LocalPath, &v.DefaultBranch, &v.IntegrationBranch, &v.VerificationProfile)
 		return v, err
 	})
 }
 
 // KeepWorktrees — задачи на репозиториях хоста этого устройства, чьи worktree нужны:
-// под lease или ждут слияния. Остальные worktree хост удаляет при старте (ТЗ п. 8.2).
+// под lease, ждут слияния или сливаются. Остальные worktree хост удаляет при старте (ТЗ п. 8.2).
 func (s *Service) KeepWorktrees(ctx context.Context, id Identity) ([]uuid.UUID, error) {
 	rows, err := s.pool.Query(ctx, `SELECT t.id FROM exec.tasks t
 		JOIN exec.repositories r ON r.id = t.repository_id JOIN exec.hosts h ON h.id = r.host_id
 		WHERE h.user_id = $1 AND h.device_id = $2 AND t.status = ANY($3)`, id.UserID, id.DeviceID,
-		append(append([]string{}, leasedStatuses...), StatusMergeable, StatusMerged, StatusPostMergeVerify))
+		append(append([]string{}, leasedStatuses...), StatusMergeable, StatusMergeQueued, StatusMerged))
 	if err != nil {
 		return nil, err
 	}
