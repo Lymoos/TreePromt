@@ -14,6 +14,7 @@ class TreePanel extends StatelessWidget {
     required this.rows,
     required this.onTap,
     this.onLongPress,
+    this.onSecondaryTap,
     this.rowHeight = 32,
     this.padding = const EdgeInsets.fromLTRB(6, 4, 6, 96),
   });
@@ -21,6 +22,9 @@ class TreePanel extends StatelessWidget {
   final List<TreeRow> rows;
   final ValueChanged<TreeRow> onTap;
   final ValueChanged<TreeRow>? onLongPress;
+
+  /// Правый клик (ПК): строка и точка на экране для контекстного меню.
+  final void Function(TreeRow row, Offset globalPosition)? onSecondaryTap;
   final double rowHeight;
   final EdgeInsets padding;
 
@@ -35,6 +39,7 @@ class TreePanel extends StatelessWidget {
           topGap: rows[i].type == RowType.project && i > 0 ? 10 : 0,
           onTap: () => onTap(rows[i]),
           onLongPress: onLongPress == null ? null : () => onLongPress!(rows[i]),
+          onSecondaryTap: onSecondaryTap == null ? null : (pos) => onSecondaryTap!(rows[i], pos),
         ),
       );
 }
@@ -46,6 +51,7 @@ class TreeRowTile extends StatelessWidget {
     required this.height,
     required this.onTap,
     this.onLongPress,
+    this.onSecondaryTap,
     this.topGap = 0,
   });
 
@@ -54,6 +60,7 @@ class TreeRowTile extends StatelessWidget {
   final double topGap;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
+  final ValueChanged<Offset>? onSecondaryTap;
 
   @override
   Widget build(BuildContext context) {
@@ -107,6 +114,7 @@ class TreeRowTile extends StatelessWidget {
             splashColor: Colors.transparent,
             onTap: onTap,
             onLongPress: onLongPress,
+            onSecondaryTapUp: onSecondaryTap == null ? null : (d) => onSecondaryTap!(d.globalPosition),
             child: SizedBox(
               height: height,
               child: Row(children: [

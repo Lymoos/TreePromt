@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 
-import 'package:prompttree_mobile/src/state/providers.dart';
+import 'package:prompttree_shared/app.dart';
 
 import 'support.dart';
 

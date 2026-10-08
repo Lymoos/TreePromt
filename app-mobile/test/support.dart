@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompttree_mobile/src/app.dart';
-import 'package:prompttree_mobile/src/state/providers.dart';
+import 'package:prompttree_shared/app.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 import 'package:sqlite3/open.dart';
 
