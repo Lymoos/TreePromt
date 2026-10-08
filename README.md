@@ -7,3 +7,5 @@
 | `docs/` | согласованные решения: [P0](docs/P0-decisions.md), [архитектура PromptTree](docs/architecture-prompttree.md) |
 | `design/` | дизайн-концепт и [решения по дизайну](design/DECISIONS.md) |
 | `backend/` | сервер на Go + PostgreSQL ([README](backend/README.md)) |
+| `shared/` | общий код Flutter: локальная БД, синхронизация, API, тема и виджеты |
+| `app-mobile/` | приложение для Android и iOS ([README](app-mobile/README.md)) |
