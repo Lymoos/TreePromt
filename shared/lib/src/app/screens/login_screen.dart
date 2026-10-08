@@ -24,7 +24,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    final url = ref.read(sessionProvider).serverUrl ?? ref.read(defaultServerUrlProvider);
+    final url = ref.read(defaultServerUrlProvider) ?? ref.read(sessionProvider).serverUrl;
     if (url != null) _server.text = url.toString();
   }
 
@@ -45,7 +45,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   String _message(Object e) {
-    if (e is NetworkException) return 'Сервер недоступен. Проверьте адрес и сеть.';
+    if (e is NetworkException) {
+      return ref.read(serverFixedProvider)
+          ? 'Нет связи с сервером PromptTree. Проверьте интернет.'
+          : 'Сервер недоступен. Проверьте адрес и сеть.';
+    }
     if (e is ApiException) {
       return switch (e.code) {
         'invalid_credentials' => 'Неверный email или пароль.',
@@ -150,14 +154,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     const SizedBox(height: 6),
                     Text('Идеи на ходу — задачи для Claude.', style: ui(15, color: c.muted)),
                     const SizedBox(height: 32),
-                    TextField(
-                      key: const Key('server'),
-                      controller: _server,
-                      keyboardType: TextInputType.url,
-                      autocorrect: false,
-                      decoration: const InputDecoration(labelText: 'Сервер', hintText: 'prompttree.example.com'),
-                    ),
-                    const SizedBox(height: 12),
+                    if (!ref.watch(serverFixedProvider)) ...[
+                      TextField(
+                        key: const Key('server'),
+                        controller: _server,
+                        keyboardType: TextInputType.url,
+                        autocorrect: false,
+                        decoration: const InputDecoration(labelText: 'Сервер', hintText: 'prompttree.example.com'),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     TextField(
                       key: const Key('email'),
                       controller: _email,

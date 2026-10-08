@@ -2,6 +2,7 @@
 library;
 
 export 'src/api/api_client.dart';
+export 'src/core/config.dart';
 export 'src/core/ids.dart';
 export 'src/core/sort_key.dart';
 export 'src/data/database.dart' show AppDatabase;

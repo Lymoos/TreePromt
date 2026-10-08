@@ -159,4 +159,23 @@ void main() {
     expect((await store.node(n))!.deletedAt, isNull);
     await tearDownApp(tester, store);
   });
+
+  testWidgets('with a built-in server the login screen has no server field', (tester) async {
+    final store = memoryStore();
+    await tester.pumpWidget(app(store,
+        session: const Session(mode: SessionMode.none),
+        extra: [defaultServerUrlProvider.overrideWithValue(Uri.parse('https://prompttree.example.com'))]));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('server')), findsNothing);
+    expect(find.byKey(const Key('email')), findsOneWidget);
+    await tearDownApp(tester, store);
+  });
+
+  testWidgets('development build without a built-in server shows the field', (tester) async {
+    final store = memoryStore();
+    await tester.pumpWidget(app(store, session: const Session(mode: SessionMode.none)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('server')), findsOneWidget);
+    await tearDownApp(tester, store);
+  });
 }

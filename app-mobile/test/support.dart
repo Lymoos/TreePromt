@@ -25,8 +25,10 @@ DriftLocalStore memoryStore() {
   return DriftLocalStore(AppDatabase(NativeDatabase.memory()));
 }
 
-Widget app(LocalStore store, {Session session = const Session(mode: SessionMode.local)}) => ProviderScope(
+Widget app(LocalStore store, {Session session = const Session(mode: SessionMode.local), List<Override> extra = const []}) =>
+    ProviderScope(
       overrides: [
+        ...extra,
         storeProvider.overrideWithValue(store),
         tokenStoreProvider.overrideWithValue(MemoryTokenStore()),
         sessionProvider.overrideWith((ref) => session),

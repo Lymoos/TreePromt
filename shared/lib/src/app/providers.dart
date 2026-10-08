@@ -12,8 +12,12 @@ final deviceInfoProvider = Provider<DeviceInfo>((ref) => (name: 'unknown', platf
 /// Заголовки для всех запросов к серверу. Веб: {'X-PT-Client': 'web'} — refresh-токен в cookie.
 final apiHeadersProvider = Provider<Map<String, String>>((ref) => const {});
 
-/// Адрес сервера по умолчанию для экрана входа. Веб: тот же адрес, откуда открыта страница.
-final defaultServerUrlProvider = Provider<Uri?>((ref) => null);
+/// Сервер PromptTree. Приложения: адрес, вшитый в сборку (PT_SERVER_URL);
+/// веб: тот же адрес, откуда открыта страница. null — сборка для разработки.
+final defaultServerUrlProvider = Provider<Uri?>((ref) => builtInServer);
+
+/// Сервер один и задан сборкой — поле «Сервер» на экране входа не показывается.
+final serverFixedProvider = Provider<bool>((ref) => ref.watch(defaultServerUrlProvider) != null);
 
 enum SessionMode { none, local, server }
 
