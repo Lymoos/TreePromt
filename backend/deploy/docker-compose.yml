@@ -1,0 +1,79 @@
+# Развёртывание на VPS: backend + PostgreSQL + Caddy (HTTPS) + ежедневный бэкап.
+# Запуск: cp .env.example .env, заполнить, затем `docker compose up -d --build`.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: prompttree
+      POSTGRES_USER: prompttree
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "prompttree"]
+      interval: 5s
+      retries: 10
+
+  backend:
+    build: ..
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://prompttree:${POSTGRES_PASSWORD}@db:5432/prompttree?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      ALLOWED_ORIGINS: https://${DOMAIN}
+      ALLOW_REGISTRATION: "false" # регистрация открыта, только пока нет ни одного пользователя
+      TRUST_PROXY: "true"
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on: [backend]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web:/srv/web:ro # сборка Flutter Web (этап 5)
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # Ежедневный pg_dump, хранится 14 дней. Пока копии лежат на самом VPS
+  # (решение от 08.10.2026): при потере VPS теряются и они.
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          ts=$$(date +%Y-%m-%d_%H%M)
+          if pg_dump -h db -U prompttree -Fc prompttree > /backups/prompttree_$$ts.dump.tmp; then
+            mv /backups/prompttree_$$ts.dump.tmp /backups/prompttree_$$ts.dump
+            echo "backup ok: $$ts"
+          else
+            rm -f /backups/prompttree_$$ts.dump.tmp
+            echo "backup FAILED: $$ts"
+          fi
+          find /backups -name 'prompttree_*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

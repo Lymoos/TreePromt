@@ -1,0 +1,16 @@
+{$DOMAIN} {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy backend:8080
+	}
+
+	# Flutter Web. Заголовки изоляции нужны SQLite (WASM) для хранения в OPFS.
+	handle {
+		root * /srv/web
+		header Cross-Origin-Opener-Policy same-origin
+		header Cross-Origin-Embedder-Policy require-corp
+		try_files {path} /index.html
+		file_server
+	}
+}

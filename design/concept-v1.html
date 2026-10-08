@@ -1,0 +1,446 @@
+<title>PromptTree — концепт v1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: одна колонка ~1080px; концепт = иконки → живой макет окна (sidebar + редактор) → легенда → решения. Строго ч/б. */
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #6e6e6e;
+  --faint: #a8a8a8;
+  --line: #e7e7e7;
+  --line-strong: #c9c9c9;
+  --hover: #f3f3f3;
+  --sel: #ebebeb;
+  --panel: #fafafa;
+  --font-ui: "Onest", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e0e0e; --fg: #ececec; --muted: #9a9a9a; --faint: #5c5c5c;
+    --line: #232323; --line-strong: #3a3a3a; --hover: #1a1a1a; --sel: #242424; --panel: #131313;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e0e0e; --fg: #ececec; --muted: #9a9a9a; --faint: #5c5c5c;
+  --line: #232323; --line-strong: #3a3a3a; --hover: #1a1a1a; --sel: #242424; --panel: #131313;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px; line-height: 1.5; }
+.wrap { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 80px; display: flex; flex-direction: column; gap: 56px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+h1 { font-size: 30px; }
+h2 { font-size: 20px; }
+p { margin: 0; }
+.eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lead { color: var(--muted); max-width: 64ch; }
+section { display: flex; flex-direction: column; gap: 18px; }
+.sec-head { display: flex; flex-direction: column; gap: 6px; }
+
+header.top { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+header.top .t { display: flex; flex-direction: column; gap: 8px; }
+
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 7px; padding: 2px; gap: 2px; }
+.seg button { font: inherit; font-size: 13px; background: none; color: var(--muted); border: 0; padding: 5px 12px; border-radius: 5px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.seg button:focus-visible, .row:focus-visible, .btn:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+
+/* ── icons ── */
+.icons { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.icard { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.icard .stage { display: grid; grid-template-columns: 1fr 1fr; }
+.icard .tile { display: flex; align-items: flex-end; justify-content: center; gap: 14px; padding: 26px 10px 18px; }
+.tile.light { background: #ffffff; color: #111111; --ibg: #ffffff; }
+.tile.dark { background: #111111; color: #f2f2f2; --ibg: #111111; }
+.icard .info { padding: 14px 16px 16px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.icard .info b { font-weight: 600; }
+.icard .info span { color: var(--muted); font-size: 13px; }
+.letter { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+
+/* ── mock window ── */
+.controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+.controls .desc { color: var(--muted); font-size: 13px; min-width: 0; flex: 1 1 260px; }
+.win { border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; display: grid; grid-template-columns: 272px minmax(0, 1fr); min-height: 560px; background: var(--bg); }
+.side { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+.side-top { --ibg: var(--panel); display: flex; align-items: center; gap: 8px; padding: 12px 14px 10px; }
+.side-top .name { font-weight: 600; font-size: 13px; }
+.side-top .k { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 5px; }
+.search { margin: 0 10px 8px; display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 6px; color: var(--faint); font-size: 13px; }
+.search:hover { background: var(--hover); }
+.tree { padding: 4px 6px 16px; display: flex; flex-direction: column; }
+.row { display: flex; align-items: stretch; min-height: 28px; border-radius: 5px; cursor: pointer; padding-right: 8px; padding-left: 6px; user-select: none; outline: none; }
+.row:hover { background: var(--hover); }
+.row.sel { background: var(--sel); }
+.row .lbl { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.row .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .cnt { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--faint); display: flex; gap: 6px; align-items: center; }
+.row.proj { margin-top: 10px; }
+.row.proj:first-child { margin-top: 0; }
+.row.proj .nm { font-weight: 600; }
+.row.fold .nm { font-weight: 500; }
+.row.file .nm { color: var(--fg); }
+.row.file.raw .nm { color: var(--muted); }
+.row.sel .nm { color: var(--fg); }
+.chev { width: 10px; height: 10px; transition: transform .15s; }
+.chev.open { transform: rotate(90deg); }
+.mk { width: 10px; height: 10px; flex: none; }
+.mk-proj { width: 9px; height: 9px; }
+
+/* tree guides: one 16px column per level */
+.g { width: 16px; flex: none; position: relative; }
+.g::before, .g::after { content: ""; position: absolute; border-color: var(--line-strong); }
+.g.v::before { left: 7px; top: 0; bottom: 0; border-left: 1px solid; }
+.g.t::before { left: 7px; top: 0; bottom: 0; border-left: 1px solid; }
+.g.t::after, .g.l::after { left: 7px; width: 8px; top: 50%; border-top: 1px solid; }
+.g.l::before { left: 7px; top: 0; height: 50%; border-left: 1px solid; }
+.g.on::before, .g.on::after { border-color: var(--fg); }
+.g.on.v::before, .g.on.t::before, .g.on.l::before { border-left-width: 1.5px; }
+.g.on::after { border-top-width: 1.5px; }
+/* variant B: no lines, only indent */
+.vB .g::before, .vB .g::after { display: none; }
+.vB .g { width: 14px; }
+/* variant C: only the active branch is drawn */
+.vC .g:not(.on)::before, .vC .g:not(.on)::after { display: none; }
+.vC .g.l.on::before { border-bottom-left-radius: 6px; }
+
+/* editor */
+.ed { display: flex; flex-direction: column; min-width: 0; }
+.ed-top { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.crumbs { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.crumbs .sep { color: var(--faint); }
+.ed-top .sync { margin-left: auto; font-family: var(--font-mono); font-size: 11px; display: flex; align-items: center; gap: 6px; }
+.ed-body { padding: 32px 40px 28px; display: flex; flex-direction: column; gap: 18px; max-width: 760px; width: 100%; }
+.ed-body h3 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+.meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); border-radius: 99px; padding: 1px 9px; font-size: 12px; color: var(--fg); }
+.banner { border: 1px solid var(--fg); border-radius: 7px; padding: 10px 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.banner .sp { flex: 1 1 200px; min-width: 0; }
+.ed-text { color: var(--fg); display: flex; flex-direction: column; gap: 10px; line-height: 1.65; max-width: 64ch; }
+.ed-text.mono { font-family: var(--font-mono); font-size: 13px; }
+.ed-text ul { margin: 0; padding-left: 20px; }
+.ed-text .h { font-weight: 600; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 18px; }
+.btn { font: inherit; font-size: 13px; border-radius: 6px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg); }
+.btn.pri { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn.sm { padding: 3px 10px; font-size: 12px; }
+
+/* legend */
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.legend > div { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); margin: 0 -1px -1px 0; }
+.legend .mk { margin-top: 5px; }
+.legend b { font-weight: 600; display: block; }
+.legend span { color: var(--muted); font-size: 13px; }
+
+/* decisions */
+.dec { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.dec li { list-style: none; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.dec { padding: 0; margin: 0; }
+.dec .n { font-family: var(--font-mono); color: var(--muted); font-size: 12px; padding-top: 2px; }
+.dec b { font-weight: 600; }
+.dec p { color: var(--muted); }
+code { font-family: var(--font-mono); font-size: 12.5px; }
+
+@media (max-width: 860px) {
+  .icons { grid-template-columns: 1fr; }
+  .win { grid-template-columns: minmax(0, 1fr); }
+  .side { border-right: 0; border-bottom: 1px solid var(--line); }
+  .ed-body { padding: 24px 18px; }
+  .ed-top { padding: 10px 18px; }
+}
+@media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="t">
+      <div class="eyebrow">Этап 2 · дизайн-концепт · согласовано 08.10.2026: иконка C, панель C, маркеры, шрифт (предварительно)</div>
+      <h1>PromptTree — концепт v1</h1>
+      <p class="lead">Три варианта иконки и три варианта левой панели. Панель только напоминает дерево каталогов: нет иконок-папок, иерархия держится на отступах, линиях ветвей и форме маркеров. Макет ниже живой: папки раскрываются, файлы выбираются.</p>
+    </div>
+    <div class="seg" role="group" aria-label="Тема">
+      <button id="th-light" type="button" aria-pressed="false">Светлая</button>
+      <button id="th-dark" type="button" aria-pressed="false">Тёмная</button>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">01 · Иконка</div>
+      <h2>Гибрид строгого дерева и символов кода</h2>
+      <p class="lead">Каждый вариант показан в размерах 64, 32 и 16 px на белом и чёрном фоне. Всё нарисовано в SVG, его же возьмём в код.</p>
+    </div>
+    <div class="icons" id="icons"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">02 · Левая панель</div>
+      <h2>Дерево без папок</h2>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Вариант панели">
+        <button type="button" data-v="A">A · Ветви</button>
+        <button type="button" data-v="B">B · Ритм</button>
+        <button type="button" data-v="C">C · Активная ветвь</button>
+      </div>
+      <p class="desc" id="vdesc"></p>
+    </div>
+    <div class="win">
+      <aside class="side">
+        <div class="side-top"><span id="mini-logo"></span><span class="name">PromptTree</span><span class="k">Ctrl K</span></div>
+        <div class="search"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>Поиск</div>
+        <div class="tree" id="tree" role="tree"></div>
+      </aside>
+      <main class="ed" id="ed"></main>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">03 · Маркеры</div>
+      <h2>Тип и состояние без цвета</h2>
+      <p class="lead">Цвета нет, поэтому всё различается формой. Папка маркера не имеет: это просто ветка с названием и счётчиком.</p>
+    </div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">04 · Нужно ваше решение</div>
+      <h2>Что согласовать</h2>
+    </div>
+    <ol class="dec">
+      <li><span class="n">1</span><div><b>Иконка: A, B или C.</b><p>Можно взять одну за основу и попросить правки.</p></div></li>
+      <li><span class="n">2</span><div><b>Панель: A, B или C.</b><p>Варианты отличаются тем, сколько линий видно: все ветви, ни одной или только путь до открытого файла.</p></div></li>
+      <li><span class="n">3</span><div><b>Маркеры.</b><p>Подходит ли схема: круг для Raw Note, ромб для AI Task (пустой, залитый, наполовину)?</p></div></li>
+      <li><span class="n">4</span><div><b>Шрифт.</b><p>Сейчас Onest для интерфейса (хорошая кириллица) и JetBrains Mono для служебных подписей. Альтернатива: системный шрифт, как в Notion.</p></div></li>
+    </ol>
+  </section>
+</div>
+
+<script>
+(function () {
+  // ── theme ──
+  const root = document.documentElement;
+  const tl = document.getElementById('th-light'), td = document.getElementById('th-dark');
+  function sysDark() { return window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches; }
+  function syncTheme() {
+    const t = root.getAttribute('data-theme') || (sysDark() ? 'dark' : 'light');
+    tl.setAttribute('aria-pressed', t === 'light'); td.setAttribute('aria-pressed', t === 'dark');
+  }
+  tl.onclick = () => { root.setAttribute('data-theme', 'light'); syncTheme(); };
+  td.onclick = () => { root.setAttribute('data-theme', 'dark'); syncTheme(); };
+  syncTheme();
+
+  // ── icons ──
+  const ICONS = {
+    A: {
+      title: 'A · Промпт-корень',
+      text: 'Знак приглашения терминала ">" как корень, от него ветви └─ к строкам. Читается как «промпт, разложенный в дерево».',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square" stroke-linejoin="miter"><path d="M3 3.5l4.5 3.5L3 10.5"/><path d="M11 7h10"/><path d="M5 13.5V20h4"/><path d="M5 16h4"/><path d="M13 16h8"/><path d="M13 20h5"/></svg>'
+    },
+    B: {
+      title: 'B · Граф в скобках',
+      text: 'Фигурные скобки кода, внутри граф коммитов: основная ветка и ответвление. Отсылает к Git и к AiCrew.',
+      svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3C5 3 4.5 4 4.5 5.5V9.5C4.5 11 3.8 12 2.5 12C3.8 12 4.5 13 4.5 14.5V18.5C4.5 20 5 21 6.5 21"/><path d="M17.5 3C19 3 19.5 4 19.5 5.5V9.5C19.5 11 20.2 12 21.5 12C20.2 12 19.5 13 19.5 14.5V18.5C19.5 20 19 21 17.5 21"/><path d="M10 7.5V16.5"/><path d="M10 9.5C10 12 14 11.5 14 14"/><circle cx="10" cy="7" r="1.6" fill="currentColor"/><circle cx="10" cy="17" r="1.6" fill="currentColor"/><circle cx="14" cy="14.5" r="1.6" fill="currentColor"/></svg>'
+    },
+    C: {
+      title: 'C · Плитка-узел',
+      text: 'Залитая плитка в духе Notion, внутри узел-проект и две ветви-файла. Самый «приложенческий» вариант, хорошо работает как иконка на телефоне.',
+      svg: '<svg viewBox="0 0 24 24"><rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="currentColor"/><g fill="none" stroke="var(--ibg, #fff)" stroke-width="1.8" stroke-linecap="square"><path d="M8.5 10.5V17.5H12.5"/><path d="M8.5 13.5H12.5"/></g><g fill="var(--ibg, #fff)"><rect x="6" y="5.5" width="5" height="5" rx="1"/><rect x="14" y="12.25" width="4.5" height="2.5" rx="0.6"/><rect x="14" y="16.25" width="3" height="2.5" rx="0.6"/></g></svg>'
+    }
+  };
+  const iconsEl = document.getElementById('icons');
+  Object.entries(ICONS).forEach(([k, ic]) => {
+    const sizes = [64, 32, 16].map(s => `<span style="width:${s}px;height:${s}px;display:block">${ic.svg.replace('<svg', `<svg width="${s}" height="${s}"`)}</span>`).join('');
+    iconsEl.insertAdjacentHTML('beforeend',
+      `<article class="icard"><div class="stage"><div class="tile light">${sizes}</div><div class="tile dark">${sizes}</div></div>
+       <div class="info"><b>${ic.title}</b><span>${ic.text}</span></div></article>`);
+  });
+  document.getElementById('mini-logo').innerHTML = ICONS.C.svg.replace('<svg', '<svg width="16" height="16" style="display:block"');
+
+  // ── markers ──
+  const MK = {
+    proj: '<svg class="mk mk-proj" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>',
+    raw: '<svg class="mk" viewBox="0 0 10 10"><circle cx="5" cy="5" r="3.4" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+    ai_none: '<svg class="mk" viewBox="0 0 10 10"><path d="M5 0.9L9.1 5L5 9.1L0.9 5Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
+    ai_done: '<svg class="mk" viewBox="0 0 10 10"><path d="M5 0.9L9.1 5L5 9.1L0.9 5Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
+    ai_stale: '<svg class="mk" viewBox="0 0 10 10"><path d="M5 0.9L5 9.1L0.9 5Z" fill="currentColor"/><path d="M5 0.9L9.1 5L5 9.1L0.9 5Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>'
+  };
+  const LEGEND = [
+    ['proj', 'Проект', 'Корень дерева. Справа число репозиториев.'],
+    [null, 'Папка', 'Без значка: название полужирным, справа счётчик и стрелка.'],
+    ['raw', 'Raw Note', 'Черновик. Название приглушено, кнопки AI нет.'],
+    ['ai_none', 'AI Task · не структурирована', 'Есть только сырой текст.'],
+    ['ai_done', 'AI Task · структурирована', 'Структура соответствует последней ревизии.'],
+    ['ai_stale', 'AI Task · есть новые правки', 'Текст изменён после структурирования (п. 6.2 ТЗ).']
+  ];
+  document.getElementById('legend').innerHTML = LEGEND.map(([m, b, s]) =>
+    `<div>${m ? MK[m] : '<span class="mk"></span>'}<div><b>${b}</b><span>${s}</span></div></div>`).join('');
+
+  // ── data (пример) ──
+  const DATA = [
+    { id: 'p1', kind: 'proj', name: 'PromptTree', repos: 4, children: [
+      { id: 'f1', kind: 'fold', name: 'Синхронизация', children: [
+        { id: 'n1', kind: 'file', type: 'ai', st: 'done', name: 'Журнал операций' },
+        { id: 'n2', kind: 'file', type: 'raw', name: 'Мысли про конфликты' }
+      ]},
+      { id: 'f2', kind: 'fold', name: 'UI', children: [
+        { id: 'n3', kind: 'file', type: 'ai', st: 'stale', name: 'Дерево-проводник' },
+        { id: 'n4', kind: 'file', type: 'raw', name: 'Референсы Notion' }
+      ]},
+      { id: 'n5', kind: 'file', type: 'ai', st: 'none', name: 'Иконка приложения' }
+    ]},
+    { id: 'p2', kind: 'proj', name: 'AiCrew', repos: 1, children: [
+      { id: 'f3', kind: 'fold', name: 'Оркестратор', children: [
+        { id: 'n6', kind: 'file', type: 'ai', st: 'done', name: 'Lease и heartbeat' },
+        { id: 'n7', kind: 'file', type: 'raw', name: 'Идеи для менеджера' }
+      ]},
+      { id: 'n8', kind: 'file', type: 'raw', name: 'Список MCP-серверов' }
+    ]},
+    { id: 'p3', kind: 'proj', name: 'Roblox Tycoon', repos: 1, children: [
+      { id: 'n9', kind: 'file', type: 'raw', name: 'Механики экономики' }
+    ]}
+  ];
+  const CONTENT = {
+    n3: {
+      raw: 'хочу левую панель как дерево но не прям папки как в проводнике. чб, минимализм как notion. проекты → папки → файлы. сразу видно где черновик а где задача для claude. на телефоне тоже должно работать.\n\nдобавил: состояние задачи (структурирована или нет) тоже видно в дереве',
+      role: 'Act as a Senior Flutter UI Expert.',
+      facts: ['Левая панель отображает иерархию Проекты → Папки → Файлы.', 'Внешний вид напоминает дерево каталогов, но не повторяет классический проводник.', 'Палитра только чёрно-белая, минимализм в духе Notion.', 'Raw Note и AI Task визуально различаются.', 'Панель работает на мобильных устройствах.'],
+      q: ['Как панель ведёт себя на телефоне: выезжающий слой или отдельный экран?']
+    },
+    n1: {
+      raw: 'каждое изменение = операция с operation_id, сервер ставит server_revision, конфликт не теряет текст',
+      role: 'Act as a Senior Go Backend Engineer.',
+      facts: ['Каждое изменение передаётся как операция с operation_id, base_server_revision и client_seq.', 'Сервер присваивает server_revision и определяет порядок операций.', 'При конфликте сохраняются обе версии текста.'],
+      q: []
+    },
+    n6: {
+      raw: 'если воркер умер, задача возвращается в очередь по истечении lease',
+      role: 'Act as a Senior Go Backend Engineer.',
+      facts: ['Задача хранит worker_id, lease_expires_at, heartbeat_at.', 'По истечении lease задача возвращается в очередь или переходит в FAILED.'],
+      q: []
+    }
+  };
+
+  const open = new Set(['p1', 'f1', 'f2', 'p2', 'f3', 'p3']);
+  let sel = 'n3', variant = 'C', tab = 'struct';
+  
+
+  const DESC = {
+    A: 'Все ветви нарисованы тонкими линиями, путь до открытого файла выделен. Ближе всего к «дереву каталогов».',
+    B: 'Линий нет совсем, иерархию задают отступ и вес шрифта. Самый тихий вариант, ближе всего к Notion.',
+    C: 'Линии появляются только на пути от проекта до открытого файла. Дерево видно, когда оно нужно.'
+  };
+
+  function find(id, list = DATA, chain = []) {
+    for (const n of list) {
+      if (n.id === id) return [...chain, n];
+      if (n.children) { const r = find(id, n.children, [...chain, n]); if (r) return r; }
+    }
+    return null;
+  }
+
+  function flatten(list, depth, guides, chain, out) {
+    list.forEach((n, i) => {
+      const last = i === list.length - 1;
+      out.push({ n, depth, guides, last, chain: [...chain, n.id] });
+      if (n.children && open.has(n.id)) flatten(n.children, depth + 1, depth > 0 ? [...guides, !last] : guides, [...chain, n.id], out);
+    });
+    return out;
+  }
+
+  const chevSvg = o => `<svg class="chev${o ? ' open' : ''}" viewBox="0 0 10 10"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>`;
+
+  function renderTree() {
+    const rows = flatten(DATA, 0, [], [], []);
+    const path = (find(sel) || []).map(n => n.id);
+    const pathRows = path.map(id => rows.findIndex(r => r.n.id === id));
+    const tree = document.getElementById('tree');
+    tree.className = 'tree v' + variant;
+    tree.innerHTML = rows.map((r, i) => {
+      const cells = [];
+      const cols = r.depth; // columns 0..depth-1
+      for (let c = 0; c < cols; c++) {
+        let cls;
+        if (c < cols - 1) cls = r.guides[c] ? 'v' : '';
+        else cls = r.last ? 'l' : 't';
+        const a = pathRows[c], b = pathRows[c + 1];
+        let on = false;
+        if (a !== undefined && b !== undefined && a >= 0 && b >= 0) {
+          if (i > a && i < b) { on = true; cls = 'v'; }
+          else if (i === b && c === cols - 1) on = true;
+        }
+        cells.push(`<span class="g ${cls}${on ? ' on' : ''}"></span>`);
+      }
+      const n = r.n;
+      let mk = '', right = '';
+      if (n.kind === 'proj') { mk = MK.proj; right = `<span class="cnt">${n.repos} repo ${chevSvg(open.has(n.id))}</span>`; }
+      else if (n.kind === 'fold') { right = `<span class="cnt">${n.children.length} ${chevSvg(open.has(n.id))}</span>`; }
+      else mk = n.type === 'raw' ? MK.raw : MK['ai_' + n.st];
+      const cls = ['row', n.kind, n.type || '', n.id === sel ? 'sel' : ''].join(' ');
+      const exp = n.children ? ` aria-expanded="${open.has(n.id)}"` : '';
+      return `<div class="${cls}" role="treeitem" tabindex="0" data-id="${n.id}"${exp} aria-selected="${n.id === sel}">${cells.join('')}<span class="lbl">${mk}<span class="nm">${n.name}</span>${right}</span></div>`;
+    }).join('');
+  }
+
+  function esc(s) { return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+  function renderEditor() {
+    const chain = find(sel); const n = chain[chain.length - 1];
+    const crumbs = chain.map(x => `<span>${esc(x.name)}</span>`).join('<span class="sep">/</span>');
+    let body = '';
+    if (n.type === 'raw') {
+      body = `<div class="meta"><span class="pill">${MK.raw} Raw Note</span><span>изменено 12 мин назад</span></div>
+        <div class="ed-text"><p>Черновик без кнопки AI. Сюда записывается всё на ходу: обрывки мыслей, ссылки, вопросы к себе.</p><p>Чтобы отправить в Claude, заметку можно превратить в AI Task.</p></div>
+        <div class="actions"><button class="btn" type="button">Превратить в AI Task</button></div>`;
+    } else {
+      const c = CONTENT[n.id];
+      const stLabel = { none: 'не структурирована', done: 'структурирована · rev 11', stale: 'структура от rev 9 · текст rev 11' }[n.st];
+      const stale = n.st === 'stale' ? `<div class="banner">${MK.ai_stale}<span class="sp">Текст изменён после структурирования. Ваши правки сохранены.</span><button class="btn sm pri" type="button">Структурировать заново</button><button class="btn sm" type="button">Сравнить</button></div>` : '';
+      const t = n.st === 'none' ? 'raw' : tab;
+      const tabs = n.st === 'none' ? '' : `<div class="seg" role="group" aria-label="Вид"><button type="button" data-tab="raw" aria-pressed="${t === 'raw'}">Исходник</button><button type="button" data-tab="struct" aria-pressed="${t === 'struct'}">Структура</button></div>`;
+      let text;
+      if (t === 'raw') {
+        text = `<div class="ed-text mono">${(c ? c.raw : 'нарисовать 3 варианта иконки: гибрид дерева и символов кода, чб, svg').split('\n\n').map(p => `<p>${esc(p)}</p>`).join('')}</div>`;
+      } else {
+        text = `<div class="ed-text"><p><span class="h">Роль.</span> ${esc(c.role)}</p><div><span class="h">Требования</span><ul>${c.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>${c.q.length ? `<div><span class="h">Открытые вопросы</span><ul>${c.q.map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}</div>`;
+      }
+      body = `<div class="meta"><span class="pill">${MK['ai_' + n.st]} AI Task</span><span>${stLabel}</span>${tabs}</div>${stale}${text}
+        <div class="actions"><button class="btn pri" type="button">Структурировать</button><button class="btn" type="button"${n.st === 'none' ? ' disabled' : ''}>Скопировать задачу</button></div>`;
+    }
+    document.getElementById('ed').innerHTML = `<div class="ed-top"><div class="crumbs">${crumbs}</div><span class="sync"><svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="currentColor"/></svg>сохранено локально · синхр.</span></div>
+      <div class="ed-body"><h3>${esc(n.name)}</h3>${body}</div>`;
+  }
+
+  function render() {
+    document.querySelectorAll('[data-v]').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === variant));
+    document.getElementById('vdesc').textContent = DESC[variant];
+    renderTree(); renderEditor();
+  }
+
+  function activate(id) {
+    const n = find(id).slice(-1)[0];
+    if (n.children) { open.has(id) ? open.delete(id) : open.add(id); }
+    else sel = id;
+    render();
+    const el = document.querySelector(`.row[data-id="${id}"]`); if (el) el.focus();
+  }
+  document.getElementById('tree').addEventListener('click', e => { const r = e.target.closest('.row'); if (r) activate(r.dataset.id); });
+  document.getElementById('tree').addEventListener('keydown', e => {
+    const r = e.target.closest('.row'); if (!r) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(r.dataset.id); }
+    if (e.key === 'ArrowDown' && r.nextElementSibling) { e.preventDefault(); r.nextElementSibling.focus(); }
+    if (e.key === 'ArrowUp' && r.previousElementSibling) { e.preventDefault(); r.previousElementSibling.focus(); }
+  });
+  document.querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
+    variant = b.dataset.v; try { localStorage.setItem('pt-variant', variant); } catch (e) {} render();
+  });
+  document.getElementById('ed').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; renderEditor(); } });
+  render();
+})();
+</script>

@@ -1,0 +1,16 @@
+# Go
+/backend/bin/
+*.exe
+
+# Secrets and runtime data
+.env
+/backend/deploy/backups/
+/backend/deploy/web/
+
+# Flutter / Dart
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
