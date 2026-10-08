@@ -17,3 +17,6 @@ build/
 
 # Локальный стенд (docker-compose.local.yml)
 .env.local
+
+# Отчёты о несовпадении скриншотов (flutter test)
+test/failures/
