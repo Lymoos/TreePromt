@@ -151,6 +151,12 @@ func dispatch(cmd string, args []string) error {
 			// Буфер обмена читается напрямую, без конвейера PowerShell и без временных файлов.
 			b, cerr := exec.Command("powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw").Output()
 			raw, err = string(b), cerr
+			switch {
+			case err == nil && strings.TrimSpace(raw) == "":
+				return errors.New("буфер обмена пуст: выделите токен и скопируйте его (в терминале — Ctrl+Shift+C или правый клик → Копировать; Ctrl+C там прерывает команду)")
+			case err == nil && !strings.Contains(printable(raw), "sk-ant-"):
+				return errors.New("в буфере обмена нет токена (sk-ant-…): скопируйте строку с токеном из вывода claude setup-token")
+			}
 		} else if term.IsTerminal(int(os.Stdin.Fd())) {
 			raw, err = readSecret("Токен: ")
 		} else {
