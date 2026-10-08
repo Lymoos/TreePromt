@@ -60,6 +60,22 @@ func (h *Hub) NotifyRevision(userIDs []uuid.UUID, revision int64) {
 	}
 }
 
+// NotifyExec: у задач AiCrew что-то изменилось — хосты сразу пробуют взять работу,
+// интерфейсы обновляют доску.
+func (h *Hub) NotifyExec(userIDs []uuid.UUID) {
+	msg := []byte(`{"type":"exec"}`)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, uid := range userIDs {
+		for c := range h.clients[uid] {
+			select {
+			case c.Send <- msg:
+			default:
+			}
+		}
+	}
+}
+
 // Count returns the number of connected clients of a user (for tests).
 func (h *Hub) Count(userID uuid.UUID) int {
 	h.mu.Lock()

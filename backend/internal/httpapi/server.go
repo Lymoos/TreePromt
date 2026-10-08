@@ -13,6 +13,7 @@ import (
 
 	"prompttree/backend/internal/ai"
 	"prompttree/backend/internal/core"
+	"prompttree/backend/internal/exec"
 	"prompttree/backend/internal/realtime"
 	"prompttree/backend/internal/tree"
 )
@@ -24,6 +25,7 @@ type Server struct {
 	tokens         *core.TokenIssuer
 	tree           *tree.Service
 	ai             *ai.Service
+	exec           *exec.Service
 	hub            *realtime.Hub
 	log            *slog.Logger
 	allowedOrigins []string
@@ -36,8 +38,9 @@ type Options struct {
 	TrustProxy     bool
 }
 
-func New(auth *core.AuthService, tokens *core.TokenIssuer, treeSvc *tree.Service, aiSvc *ai.Service, hub *realtime.Hub, log *slog.Logger, opt Options) *Server {
-	return &Server{auth: auth, tokens: tokens, tree: treeSvc, ai: aiSvc, hub: hub, log: log,
+func New(auth *core.AuthService, tokens *core.TokenIssuer, treeSvc *tree.Service, aiSvc *ai.Service, execSvc *exec.Service,
+	hub *realtime.Hub, log *slog.Logger, opt Options) *Server {
+	return &Server{auth: auth, tokens: tokens, tree: treeSvc, ai: aiSvc, exec: execSvc, hub: hub, log: log,
 		allowedOrigins: opt.AllowedOrigins, trustProxy: opt.TrustProxy, limiter: newIPLimiter()}
 }
 
@@ -55,6 +58,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/sync/pull", s.authed(s.handlePull))
 	mux.HandleFunc("POST /api/v1/ai/structure", s.authed(s.handleStructure))
 	mux.HandleFunc("GET /api/v1/ai/structure/{id}", s.authed(s.handleStructureStatus))
+	mux.HandleFunc("POST /api/v1/exec/hosts", s.authed(s.handleExecRegisterHost))
+	mux.HandleFunc("POST /api/v1/exec/repositories", s.authed(s.handleExecCreateRepository))
+	mux.HandleFunc("GET /api/v1/exec/repositories", s.authed(s.handleExecListRepositories))
+	mux.HandleFunc("POST /api/v1/exec/tasks", s.authed(s.handleExecCreateTask))
+	mux.HandleFunc("GET /api/v1/exec/tasks", s.authed(s.handleExecListTasks))
+	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/cancel", s.authed(s.handleExecCancel))
+	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/retry", s.authed(s.handleExecRetry))
+	mux.HandleFunc("POST /api/v1/exec/claim", s.authed(s.handleExecClaim))
+	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/heartbeat", s.authed(s.handleExecHeartbeat))
+	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/transition", s.authed(s.handleExecTransition))
+	mux.HandleFunc("GET /api/v1/exec/keep-worktrees", s.authed(s.handleExecKeepWorktrees))
 	mux.HandleFunc("GET /api/v1/ws", s.handleWS)
 	return s.recoverer(s.cors(mux))
 }

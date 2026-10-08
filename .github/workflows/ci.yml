@@ -37,6 +37,27 @@ jobs:
           TEST_DATABASE_URL: postgres://postgres:ci_only@localhost:5432/postgres?sslmode=disable
         run: go test -count=1 ./...
 
+  aicrew:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest] # домашний хост — Windows (DPAPI)
+    defaults:
+      run:
+        working-directory: aicrew
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: aicrew/go.mod
+          cache-dependency-path: aicrew/go.sum
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+
   flutter:
     runs-on: ubuntu-latest
     strategy:
@@ -61,7 +82,7 @@ jobs:
         run: flutter test --exclude-tags golden
 
   images:
-    needs: [backend, flutter]
+    needs: [backend, aicrew, flutter]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

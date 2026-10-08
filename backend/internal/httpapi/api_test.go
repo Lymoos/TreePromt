@@ -17,6 +17,7 @@ import (
 
 	"prompttree/backend/internal/ai"
 	"prompttree/backend/internal/core"
+	"prompttree/backend/internal/exec"
 	"prompttree/backend/internal/realtime"
 	"prompttree/backend/internal/testdb"
 	"prompttree/backend/internal/tree"
@@ -32,7 +33,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	hub := realtime.NewHub()
 	treeSvc := tree.NewService(pool, hub, log)
-	srv := httptest.NewServer(New(auth, tokens, treeSvc, ai.NewService(treeSvc, nil, 0, log), hub, log, Options{}).Handler())
+	srv := httptest.NewServer(New(auth, tokens, treeSvc, ai.NewService(treeSvc, nil, 0, log), exec.NewService(pool, hub, log), hub, log, Options{}).Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
