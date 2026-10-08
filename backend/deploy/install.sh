@@ -21,6 +21,7 @@ if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; t
   apt-get install -y -qq ca-certificates curl openssl iproute2 dnsutils >/dev/null
   # Официальный репозиторий Docker: свежий Docker Engine и плагин compose.
   install -m 0755 -d /etc/apt/keyrings
+  # shellcheck disable=SC1091
   . /etc/os-release
   curl -fsSL "https://download.docker.com/linux/${ID}/gpg" -o /etc/apt/keyrings/docker.asc
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" \
@@ -35,8 +36,10 @@ cd "$DIR"
 
 if [ -f .env ]; then
   say "2/6 Настройки: .env уже есть, оставляю как есть"
+  set -a
   # shellcheck disable=SC1091
-  set -a; . ./.env; set +a
+  . ./.env
+  set +a
 else
   say "2/6 Настройки"
   read -rp "Домен (DNS должен указывать на этот сервер): " DOMAIN
