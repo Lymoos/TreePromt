@@ -153,20 +153,16 @@ class AnimatedAppIcon extends StatefulWidget {
 }
 
 class _AnimatedAppIconState extends State<AnimatedAppIcon> with SingleTickerProviderStateMixin {
-  late final _c = AnimationController(vsync: this, duration: widget.duration);
-
-  @override
-  void initState() {
-    super.initState();
-    Future.delayed(widget.delay, () {
-      if (mounted) _c.forward();
-    });
-  }
+  // Задержка — часть длительности: без таймеров, которые переживают виджет.
+  late final _c = AnimationController(vsync: this, duration: widget.delay + widget.duration);
+  late final double _start = widget.delay.inMicroseconds / (widget.delay + widget.duration).inMicroseconds;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) _c.value = 1;
+    if (_c.status == AnimationStatus.dismissed) {
+      (MediaQuery.maybeDisableAnimationsOf(context) ?? false) ? _c.value = 1 : _c.forward();
+    }
   }
 
   @override
@@ -181,7 +177,8 @@ class _AnimatedAppIconState extends State<AnimatedAppIcon> with SingleTickerProv
     return AnimatedBuilder(
       animation: _c,
       builder: (context, _) {
-        final appear = Curves.easeOutCubic.transform((_c.value * 2.5).clamp(0, 1));
+        final p = ((_c.value - _start) / (1 - _start)).clamp(0.0, 1.0);
+        final appear = Curves.easeOutCubic.transform((p * 2.5).clamp(0, 1));
         return Opacity(
           opacity: appear,
           child: Transform.scale(
@@ -191,7 +188,7 @@ class _AnimatedAppIconState extends State<AnimatedAppIcon> with SingleTickerProv
               painter: AppIconPainter(
                 tile: widget.tile ?? cs.onSurface,
                 inner: widget.inner ?? cs.surface,
-                progress: _c.value,
+                progress: p,
               ),
             ),
           ),

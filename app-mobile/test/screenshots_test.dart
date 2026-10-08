@@ -38,7 +38,7 @@ Future<String> seed(DriftLocalStore store) async {
 
 Future<void> openTree(WidgetTester tester) async {
   for (final name in ['PromptTree', 'UI', 'Синхронизация', 'AiCrew']) {
-    await tester.tap(find.text(name).first);
+    await tester.tap(find.text(name).last);
     await tester.pumpAndSettle();
   }
 }
@@ -75,14 +75,76 @@ void main() {
     });
   }
 
-  testWidgets('login screen', (tester) async {
+  Future<void> phone(WidgetTester tester, {bool dark = false}) async {
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
+    tester.platformDispatcher.platformBrightnessTestValue = dark ? Brightness.dark : Brightness.light;
     addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+  }
+
+  for (final dark in [false, true]) {
+    final theme = dark ? 'dark' : 'light';
+
+    testWidgets('login screen ($theme)', (tester) async {
+      await phone(tester, dark: dark);
+      final store = memoryStore();
+      await tester.pumpWidget(app(store, session: const Session(mode: SessionMode.none)));
+      await tester.pumpAndSettle();
+      await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/login_$theme.png'));
+      await tearDownApp(tester, store);
+    });
+  }
+
+  testWidgets('empty tree', (tester) async {
+    await phone(tester);
     final store = memoryStore();
-    await tester.pumpWidget(app(store, session: const Session(mode: SessionMode.none)));
+    await tester.pumpWidget(app(store));
     await tester.pumpAndSettle();
-    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/login_light.png'));
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/empty_light.png'));
+    await tearDownApp(tester, store);
+  });
+
+  testWidgets('create menu and row menu', (tester) async {
+    await phone(tester);
+    final store = memoryStore();
+    await seed(store);
+    await tester.pumpWidget(app(store));
+    await tester.pumpAndSettle();
+    await openTree(tester);
+    // Выбрать папку UI, оставив её раскрытой.
+    for (var i = 0; i < 2; i++) {
+      await tester.tap(find.text('UI'));
+      await tester.pumpAndSettle();
+    }
+    await tester.tap(find.byKey(const Key('create')));
+    await tester.pumpAndSettle();
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/create_sheet_light.png'));
+    await tester.tapAt(const Offset(20, 40));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Журнал операций'));
+    await tester.pumpAndSettle();
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/row_sheet_light.png'));
+    await tearDownApp(tester, store);
+  });
+
+  testWidgets('trash', (tester) async {
+    await phone(tester, dark: true);
+    final store = memoryStore();
+    final t = TreeService(store);
+    final p = await t.createProject('PromptTree');
+    for (final name in ['Старая идея', 'Черновик про иконку']) {
+      await t.delete(await t.createNode(projectId: p, kind: NodeKind.rawNote, name: name));
+    }
+    await t.delete(await t.createNode(projectId: p, kind: NodeKind.folder, name: 'Архив'));
+    await tester.pumpWidget(app(store));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('menu')));
+    await tester.pumpAndSettle();
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/menu_dark.png'));
+    await tester.tap(find.text('Корзина'));
+    await tester.pumpAndSettle();
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/trash_dark.png'));
     await tearDownApp(tester, store);
   });
 }

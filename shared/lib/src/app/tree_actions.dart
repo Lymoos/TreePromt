@@ -104,12 +104,14 @@ class TreeActions {
           ),
           TreeAction(
             label: 'Папка',
-            icon: Icons.subdirectory_arrow_right,
+            caption: 'Группа заметок внутри проекта',
+            icon: Icons.subdirectory_arrow_right_rounded,
             run: (c) => _create(c, target, NodeKind.folder, 'Новая папка'),
           ),
         ],
         TreeAction(
           label: 'Проект',
+          caption: 'Отдельное дерево для большой темы',
           marker: MarkerType.project,
           dividerBefore: target != null,
           run: createProject,
@@ -121,6 +123,7 @@ class TreeActions {
       return [
         TreeAction(
           label: 'Переименовать',
+          icon: Icons.edit_outlined,
           run: (c) async {
             final name = await askName(c, title: 'Переименовать проект', initial: r.name);
             if (name != null) await _tree.renameProject(r.id, name);
@@ -128,6 +131,7 @@ class TreeActions {
         ),
         TreeAction(
           label: 'Удалить проект',
+          icon: Icons.delete_outline_rounded,
           dividerBefore: true,
           run: (c) async {
             if (await confirm(c,
@@ -142,15 +146,16 @@ class TreeActions {
     }
     final isTask = r.kind == NodeKind.aiTask;
     return [
-      if (r.type == RowType.file) TreeAction(label: 'Открыть', run: (_) async => tap(r)),
+      if (r.type == RowType.file) TreeAction(label: 'Открыть', icon: Icons.open_in_new_rounded, run: (_) async => tap(r)),
       TreeAction(
         label: 'Переименовать',
+        icon: Icons.edit_outlined,
         run: (c) async {
           final name = await askName(c, title: 'Переименовать', initial: r.name);
           if (name != null) await _tree.rename(r.id, name);
         },
       ),
-      TreeAction(label: 'Переместить', run: (c) => move(c, r)),
+      TreeAction(label: 'Переместить', icon: Icons.drive_file_move_outline, run: (c) => move(c, r)),
       if (r.type == RowType.file)
         TreeAction(
           label: isTask ? 'Сделать черновиком' : 'Сделать AI Task',
@@ -159,6 +164,7 @@ class TreeActions {
         ),
       TreeAction(
         label: 'Удалить',
+        icon: Icons.delete_outline_rounded,
         dividerBefore: true,
         run: (c) async {
           if (await confirm(c,
@@ -198,22 +204,38 @@ class TreeActions {
 
     walk(null, 1);
     final c = context.pt;
-    final picked = await showDialog<({String? id})>(
-      context: context,
+    final picked = await showPtDialog<({String? id})>(
+      context,
       builder: (context) => SimpleDialog(
         title: Text('Переместить «${r.name}»'),
+        contentPadding: const EdgeInsets.fromLTRB(10, 12, 10, 14),
         children: [
-          for (final d in dests)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, (id: d.id)),
-              padding: EdgeInsets.fromLTRB(24 + d.depth * 16.0, 10, 24, 10),
-              child: Row(children: [
-                if (d.id == null) ...[Marker(MarkerType.project, size: 9, color: c.fg), const SizedBox(width: 10)],
-                Expanded(
-                  child: Text(d.name,
-                      style: ui(15, weight: d.id == null ? FontWeight.w600 : FontWeight.w500, color: c.fg)),
+          for (final (i, d) in dests.indexed)
+            FadeSlideIn(
+              delay: FadeSlideIn.stagger(i, step: 30),
+              duration: const Duration(milliseconds: 320),
+              offset: const Offset(0, 6),
+              child: Pressable(
+                onTap: () => Navigator.pop(context, (id: d.id)),
+                borderRadius: BorderRadius.circular(PtRadius.sm + 2),
+                pressedScale: 0.98,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(14 + d.depth * 16.0, 11, 14, 11),
+                  child: Row(children: [
+                    SizedBox(
+                      width: 14,
+                      child: d.id == null
+                          ? Marker(MarkerType.project, size: 9, color: c.fg)
+                          : Icon(Icons.subdirectory_arrow_right_rounded, size: 14, color: c.faint),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(d.name,
+                          style: ui(15, weight: d.id == null ? FontWeight.w600 : FontWeight.w500, color: c.fg)),
+                    ),
+                  ]),
                 ),
-              ]),
+              ),
             ),
         ],
       ),

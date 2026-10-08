@@ -14,5 +14,6 @@ export 'src/models/ops.dart';
 export 'src/sync/server_state.dart';
 export 'src/sync/sync_engine.dart';
 export 'src/ui/glyphs.dart';
+export 'src/ui/motion.dart';
 export 'src/ui/theme.dart';
 export 'src/ui/tree_panel.dart';

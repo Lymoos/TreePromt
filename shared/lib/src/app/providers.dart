@@ -86,3 +86,25 @@ final contentProvider =
     StreamProvider.family<NodeContent?, String>((ref, id) => ref.watch(storeProvider).watchContent(id));
 final versionsProvider =
     StreamProvider.family<List<ContentVersion>, String>((ref, id) => ref.watch(storeProvider).watchVersions(id));
+
+/// Сколько живых проектов и заметок — для подписи под заголовком.
+final treeStatsProvider = Provider<({int projects, int notes})>((ref) {
+  final projects = ref.watch(projectsProvider).valueOrNull ?? const <Project>[];
+  final nodes = ref.watch(nodesProvider).valueOrNull ?? const <TreeNode>[];
+  final alive = {for (final p in projects) if (p.deletedAt == null) p.id};
+  return (
+    projects: alive.length,
+    notes: nodes.where((n) => n.deletedAt == null && n.kind != NodeKind.folder && alive.contains(n.projectId)).length,
+  );
+});
+
+/// «1 проект», «3 проекта», «5 проектов».
+String plural(int n, String one, String few, String many) {
+  final m10 = n % 10, m100 = n % 100;
+  final word = m10 == 1 && m100 != 11
+      ? one
+      : (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14))
+          ? few
+          : many;
+  return '$n $word';
+}

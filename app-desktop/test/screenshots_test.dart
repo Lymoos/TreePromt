@@ -1,7 +1,9 @@
 // Скриншоты окна ПК для визуальной проверки.
 // Обновить: flutter test --update-goldens test/screenshots_test.dart
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompttree_shared/app.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 
 import 'support.dart';
@@ -58,4 +60,23 @@ void main() {
       await tearDownApp(tester, store);
     });
   }
+
+  testWidgets('desktop login and placeholder', (tester) async {
+    tester.view.physicalSize = const Size(2560, 1600);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+    final store = memoryStore();
+    await seed(store);
+    await tester.pumpWidget(app(store, session: const Session(mode: SessionMode.none)));
+    await tester.pumpAndSettle();
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/login_light.png'));
+    await tester.tap(find.text('Работать без сервера'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('PromptTree').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('UI'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/placeholder_menu_light.png'));
+    await tearDownApp(tester, store);
+  });
 }

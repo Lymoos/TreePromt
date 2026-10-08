@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 
 import '../providers.dart';
+import '../widgets/common.dart';
 import 'versions_screen.dart' show formatTime;
 
 /// Корзина: удалённое мягко, всё можно вернуть. Окончательного удаления в приложении нет.
@@ -43,32 +44,81 @@ class TrashScreen extends ConsumerWidget {
 
     final tree = ref.read(treeServiceProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Корзина')),
-      body: items.isEmpty
-          ? Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text('Корзина пуста.', style: ui(15, color: c.muted)),
-            )
-          : ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
-              for (final it in items)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 6, 12, 6),
-                  child: Row(children: [
-                    SizedBox(width: 16, child: it.marker == null ? null : Marker(it.marker!, color: c.fg)),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(it.name, style: ui(15, weight: it.project ? FontWeight.w600 : FontWeight.w400, color: c.fg)),
-                        Text('удалено ${formatTime(it.at)}', style: mono(11, color: c.faint)),
-                      ]),
+      appBar: AppBar(
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Корзина'),
+          if (items.isNotEmpty)
+            Text(plural(items.length, 'элемент', 'элемента', 'элементов'), style: mono(11, color: c.faint)),
+        ]),
+      ),
+      body: FadeSwitcher(
+        expand: true,
+        child: items.isEmpty
+            ? const EmptyState(
+                key: ValueKey('empty'),
+                icon: Icons.delete_outline_rounded,
+                title: 'Корзина пуста',
+                text: 'Удалённые проекты и заметки появятся здесь. Любой из них можно будет вернуть.',
+              )
+            : ListView(
+                key: const ValueKey('list'),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                children: [
+                  for (final (i, it) in items.indexed)
+                    FadeSlideIn(
+                      key: ValueKey(it.id),
+                      delay: FadeSlideIn.stagger(i),
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 720),
+                            child: PtCard(
+                              padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                              child: Row(children: [
+                                Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: c.panel,
+                                    borderRadius: BorderRadius.circular(PtRadius.sm + 2),
+                                    border: Border.all(color: c.line),
+                                  ),
+                                  child: Center(
+                                    child: it.marker == null
+                                        ? Icon(Icons.subdirectory_arrow_right_rounded, size: 16, color: c.muted)
+                                        : Marker(it.marker!, size: it.project ? 9 : 10, color: c.fg),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text(it.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: ui(15, weight: it.project ? FontWeight.w600 : FontWeight.w500, color: c.fg)),
+                                    const SizedBox(height: 2),
+                                    Text('удалено ${formatTime(it.at)}', style: mono(11, color: c.faint)),
+                                  ]),
+                                ),
+                                TextButton.icon(
+                                  onPressed: () async {
+                                    final messenger = ScaffoldMessenger.of(context);
+                                    await (it.project ? tree.restoreProject(it.id) : tree.restore(it.id));
+                                    messenger.showSnackBar(SnackBar(content: Text('«${it.name}» возвращено')));
+                                  },
+                                  icon: const Icon(Icons.restore_rounded, size: 17),
+                                  label: const Text('Вернуть'),
+                                ),
+                              ]),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                    TextButton(
-                      onPressed: () => it.project ? tree.restoreProject(it.id) : tree.restore(it.id),
-                      child: const Text('Вернуть'),
-                    ),
-                  ]),
-                ),
-            ]),
+                ],
+              ),
+      ),
     );
   }
 }

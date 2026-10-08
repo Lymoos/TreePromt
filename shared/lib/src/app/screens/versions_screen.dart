@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 
 import '../providers.dart';
+import '../widgets/common.dart';
 import '../widgets/dialogs.dart';
 
 String reasonLabel(String r) => switch (r) {
@@ -33,48 +34,90 @@ class VersionsScreen extends ConsumerWidget {
         .toList();
     return Scaffold(
       appBar: AppBar(title: const Text('История версий')),
-      body: versions.isEmpty
-          ? Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(
-                'Версий пока нет. Они появляются перед откатом, при конфликте и после паузы в редактировании больше 5 минут. '
-                'История приходит с сервера.',
-                style: ui(15, color: c.muted, height: 1.5),
+      body: FadeSwitcher(
+        expand: true,
+        child: versions.isEmpty
+            ? const EmptyState(
+                key: ValueKey('empty'),
+                icon: Icons.history_rounded,
+                title: 'Версий пока нет',
+                text: 'Они появляются перед откатом, при конфликте и после паузы в редактировании больше 5 минут. '
+                    'История приходит с сервера.',
+              )
+            : ListView.builder(
+                key: const ValueKey('list'),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                itemCount: versions.length,
+                itemBuilder: (context, i) {
+                  final v = versions[i];
+                  final last = i == versions.length - 1;
+                  return FadeSlideIn(
+                    key: ValueKey(v.id),
+                    delay: FadeSlideIn.stagger(i),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 720),
+                        // Лента времени: точка и линия слева, карточка версии справа.
+                        child: IntrinsicHeight(
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                            SizedBox(
+                              width: 24,
+                              child: Column(children: [
+                                const SizedBox(height: 20),
+                                Container(
+                                  width: 9,
+                                  height: 9,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: i == 0 ? c.fg : c.bg,
+                                    border: Border.all(color: c.fg, width: 1.5),
+                                  ),
+                                ),
+                                if (!last) Expanded(child: Container(width: 1.5, color: c.line)),
+                              ]),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: PtCard(
+                                  onTap: () => _preview(context, ref, v),
+                                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Row(children: [
+                                      Expanded(
+                                        child: Text(reasonLabel(v.reason),
+                                            style: ui(14, weight: FontWeight.w600, color: c.fg)),
+                                      ),
+                                      Text(formatTime(v.createdAt), style: mono(11, color: c.faint)),
+                                    ]),
+                                    const SizedBox(height: 6),
+                                    Text(v.content.isEmpty ? '(пусто)' : v.content,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: ui(14, color: c.muted, height: 1.45)),
+                                  ]),
+                                ),
+                              ),
+                            ),
+                          ]),
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: versions.length,
-              separatorBuilder: (_, __) => Divider(color: c.line, indent: 20, endIndent: 20),
-              itemBuilder: (context, i) {
-                final v = versions[i];
-                return InkWell(
-                  onTap: () => _preview(context, ref, v),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Row(children: [
-                        Expanded(child: Text(reasonLabel(v.reason), style: ui(14, weight: FontWeight.w500, color: c.fg))),
-                        Text(formatTime(v.createdAt), style: mono(11, color: c.faint)),
-                      ]),
-                      const SizedBox(height: 4),
-                      Text(v.content.isEmpty ? '(пусто)' : v.content,
-                          maxLines: 2, overflow: TextOverflow.ellipsis, style: ui(14, color: c.muted)),
-                    ]),
-                  ),
-                );
-              },
-            ),
+      ),
     );
   }
 
   Future<void> _preview(BuildContext context, WidgetRef ref, ContentVersion v) async {
-    final restore = await showDialog<bool>(
-      context: context,
+    final restore = await showPtDialog<bool>(
+      context,
       builder: (context) => AlertDialog(
         title: Text(reasonLabel(v.reason)),
         content: SizedBox(
-          width: double.maxFinite,
+          width: 560,
           child: SingleChildScrollView(child: SelectableText(v.content, style: ui(14, color: context.pt.fg, height: 1.5))),
         ),
         actions: [

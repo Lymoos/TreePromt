@@ -26,28 +26,50 @@ class SyncBadge extends ConsumerWidget {
         },
     };
 
+    final syncing = session.mode == SessionMode.server && state.phase == SyncPhase.syncing;
+
     return Semantics(
       label: 'Синхронизация: $label',
       button: true,
-      child: InkWell(
-        key: const Key('sync-badge'),
-        borderRadius: BorderRadius.circular(6),
-        onTap: () => ref.read(syncEngineProvider)?.syncNow(),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              width: 7,
-              height: 7,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: filled ? c.fg : Colors.transparent,
-                border: Border.all(color: c.fg, width: 1.2),
+      child: Tooltip(
+        message: session.mode == SessionMode.local ? 'Заметки хранятся только на этом устройстве' : 'Синхронизировать сейчас',
+        child: Pressable(
+          key: const Key('sync-badge'),
+          onTap: () => ref.read(syncEngineProvider)?.syncNow(),
+          borderRadius: BorderRadius.circular(99),
+          color: c.panel,
+          border: Border.all(color: c.line),
+          pressedScale: 0.95,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                width: 8,
+                height: 8,
+                child: syncing
+                    ? CircularProgressIndicator(strokeWidth: 1.4, color: c.fg)
+                    : AnimatedContainer(
+                        duration: PtMotion.normal,
+                        curve: PtMotion.curve,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: filled ? c.fg : Colors.transparent,
+                          border: Border.all(color: c.fg, width: 1.3),
+                        ),
+                      ),
               ),
-            ),
-            const SizedBox(width: 6),
-            Text(label, style: mono(11, color: c.muted)),
-          ]),
+              const SizedBox(width: 7),
+              AnimatedSize(
+                duration: PtMotion.normal,
+                curve: PtMotion.curve,
+                child: AnimatedSwitcher(
+                  duration: PtMotion.normal,
+                  transitionBuilder: (child, a) => FadeTransition(opacity: a, child: child),
+                  child: Text(label, key: ValueKey(label), style: mono(11, color: c.muted)),
+                ),
+              ),
+            ]),
+          ),
         ),
       ),
     );

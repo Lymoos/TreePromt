@@ -58,7 +58,21 @@ class _PromptTreeAppState extends ConsumerState<PromptTreeApp> with WidgetsBindi
       debugShowCheckedModeBanner: false,
       theme: buildTheme(Brightness.light),
       darkTheme: buildTheme(Brightness.dark),
-      home: session.mode == SessionMode.none ? const LoginScreen() : Builder(builder: _shell),
+      themeAnimationDuration: PtMotion.slow,
+      themeAnimationCurve: PtMotion.curve,
+      // Вход ↔ приложение: мягкая смена, а не резкий скачок.
+      home: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 450),
+        switchInCurve: PtMotion.curve,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, a) => FadeTransition(
+          opacity: a,
+          child: ScaleTransition(scale: Tween<double>(begin: 0.985, end: 1).animate(a), child: child),
+        ),
+        child: session.mode == SessionMode.none
+            ? const LoginScreen(key: ValueKey('login'))
+            : Builder(key: const ValueKey('app'), builder: _shell),
+      ),
     );
   }
 }

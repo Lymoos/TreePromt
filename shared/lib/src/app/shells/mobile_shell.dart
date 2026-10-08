@@ -13,86 +13,122 @@ class MobileShell extends ConsumerWidget {
     final rows = ref.watch(treeRowsProvider);
     final loaded = ref.watch(projectsProvider).hasValue;
     final session = ref.watch(sessionProvider);
+    final stats = ref.watch(treeStatsProvider);
     final authLost = ref.watch(syncStateProvider).valueOrNull?.phase == SyncPhase.authRequired;
     final actions = TreeActions(
       ref,
       openNode: (id) => Navigator.push(context, MaterialPageRoute(builder: (_) => EditorScreen(nodeId: id))),
     );
 
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 16,
-        title: const Row(children: [
-          AppIcon(size: 22),
-          SizedBox(width: 10),
-          Flexible(child: Text('PromptTree', overflow: TextOverflow.ellipsis, maxLines: 1)),
-        ]),
-        actions: [
-          const SyncBadge(),
-          PopupMenuButton<String>(
-            key: const Key('menu'),
-            icon: Icon(Icons.more_horiz, color: c.fg),
-            color: c.bg,
-            onSelected: (v) async {
-              switch (v) {
-                case 'trash':
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const TrashScreen()));
-                case 'login':
-                  ref.read(sessionProvider.notifier).state =
-                      Session(mode: SessionMode.none, serverUrl: session.serverUrl);
-                case 'logout':
-                  await logout(context, ref);
-              }
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'trash', child: Text('Корзина')),
-              if (session.mode == SessionMode.server)
-                const PopupMenuItem(value: 'logout', child: Text('Выйти'))
-              else
-                const PopupMenuItem(value: 'login', child: Text('Подключить сервер')),
-            ],
-          ),
-          const SizedBox(width: 4),
-        ],
-      ),
-      body: Column(children: [
-        if (authLost)
-          SessionNotice(
-            onLogin: () => ref.read(sessionProvider.notifier).state =
-                Session(mode: SessionMode.none, serverUrl: session.serverUrl),
-          ),
+    final header = Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 8, 6),
+      child: Row(children: [
+        const AnimatedAppIcon(size: 30, duration: Duration(milliseconds: 900)),
+        const SizedBox(width: 12),
         Expanded(
-          child: !loaded
-              ? const SizedBox.shrink()
-              : rows.isEmpty
-                  ? EmptyTree(onCreate: () => actions.createProject(context))
-                  : TreePanel(
-                      rows: rows,
-                      rowHeight: 40,
-                      onTap: actions.tap,
-                      onLongPress: (r) => _sheet(context, r.name.toUpperCase(), actions.rowMenu(r)),
-                    ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text('PromptTree',
+                style: ui(20, weight: FontWeight.w700, color: c.fg, letterSpacing: -0.4),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1),
+            AnimatedSwitcher(
+              duration: PtMotion.normal,
+              child: Text(
+                stats.projects == 0
+                    ? 'идеи на ходу'
+                    : '${plural(stats.projects, 'проект', 'проекта', 'проектов')} · '
+                        '${plural(stats.notes, 'заметка', 'заметки', 'заметок')}',
+                key: ValueKey(stats),
+                style: mono(11, color: c.faint),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ]),
+        ),
+        const SyncBadge(),
+        const SizedBox(width: 2),
+        PopupMenuButton<String>(
+          key: const Key('menu'),
+          tooltip: 'Меню',
+          icon: Icon(Icons.more_horiz_rounded, color: c.fg),
+          position: PopupMenuPosition.under,
+          offset: const Offset(0, 6),
+          onSelected: (v) async {
+            switch (v) {
+              case 'trash':
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const TrashScreen()));
+              case 'login':
+                ref.read(sessionProvider.notifier).state = Session(mode: SessionMode.none, serverUrl: session.serverUrl);
+              case 'logout':
+                await logout(context, ref);
+            }
+          },
+          itemBuilder: (_) => [
+            menuItem('trash', Icons.delete_outline_rounded, 'Корзина', c),
+            if (session.mode == SessionMode.server)
+              menuItem('logout', Icons.logout_rounded, 'Выйти', c)
+            else
+              menuItem('login', Icons.cloud_outlined, 'Подключить сервер', c),
+          ],
         ),
       ]),
-      floatingActionButton: rows.isEmpty
-          ? null
-          : FloatingActionButton(
-              key: const Key('create'),
-              backgroundColor: c.fg,
-              foregroundColor: c.bg,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              onPressed: () async {
-                final target = await actions.target();
-                if (!context.mounted) return;
-                await _sheet(
-                  context,
-                  target == null ? 'СОЗДАТЬ' : 'СОЗДАТЬ В «${target.label.toUpperCase()}»',
-                  actions.createMenu(target),
-                );
-              },
-              child: const Icon(Icons.add),
+    );
+
+    return Scaffold(
+      body: SafeArea(
+        bottom: false,
+        child: Column(children: [
+          header,
+          if (authLost)
+            SessionNotice(
+              onLogin: () =>
+                  ref.read(sessionProvider.notifier).state = Session(mode: SessionMode.none, serverUrl: session.serverUrl),
             ),
+          Expanded(
+            child: FadeSwitcher(
+              expand: true,
+              child: !loaded
+                  ? const SizedBox.shrink(key: ValueKey('loading'))
+                  : rows.isEmpty
+                      ? EmptyTree(key: const ValueKey('empty'), onCreate: () => actions.createProject(context))
+                      : TreePanel(
+                          key: const ValueKey('tree'),
+                          rows: rows,
+                          rowHeight: 44,
+                          padding: const EdgeInsets.fromLTRB(10, 6, 10, 120),
+                          onTap: actions.tap,
+                          onLongPress: (r) => _sheet(context, r.name.toUpperCase(), actions.rowMenu(r)),
+                        ),
+            ),
+          ),
+        ]),
+      ),
+      floatingActionButton: AnimatedScale(
+        scale: rows.isEmpty ? 0 : 1,
+        duration: PtMotion.normal,
+        curve: rows.isEmpty ? Curves.easeIn : Curves.easeOutBack,
+        child: rows.isEmpty
+            ? const SizedBox.shrink()
+            : DecoratedBox(
+                decoration: ShapeDecoration(shape: const StadiumBorder(), shadows: c.elevation(1.2)),
+                child: FloatingActionButton.extended(
+                  key: const Key('create'),
+                  heroTag: null,
+                  onPressed: () async {
+                    final target = await actions.target();
+                    if (!context.mounted) return;
+                    await _sheet(
+                      context,
+                      target == null ? 'СОЗДАТЬ' : 'СОЗДАТЬ В «${target.label.toUpperCase()}»',
+                      actions.createMenu(target),
+                    );
+                  },
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Добавить'),
+                ),
+              ),
+      ),
     );
   }
 
@@ -101,15 +137,15 @@ class MobileShell extends ConsumerWidget {
     final c = context.pt;
     final picked = await showSheet<TreeAction>(context, title: title, children: [
       for (final a in items) ...[
-        if (a.dividerBefore) Divider(color: c.line, indent: 20, endIndent: 20),
+        if (a.dividerBefore) Divider(color: c.line, indent: 24, endIndent: 24, height: 13),
         Builder(
           builder: (sheet) => SheetItem(
             label: a.label,
             caption: a.caption,
             leading: a.marker != null
-                ? Marker(a.marker!, size: a.marker == MarkerType.project ? 9 : 10, color: c.fg)
+                ? Marker(a.marker!, size: a.marker == MarkerType.project ? 10 : 12, color: c.fg)
                 : a.icon != null
-                    ? Icon(a.icon, size: 16, color: c.fg)
+                    ? Icon(a.icon, size: 18, color: c.fg)
                     : null,
             onTap: () => Navigator.pop(sheet, a),
           ),
@@ -119,3 +155,14 @@ class MobileShell extends ConsumerWidget {
     if (picked != null && context.mounted) await picked.run(context);
   }
 }
+
+/// Пункт выпадающего меню со значком.
+PopupMenuItem<String> menuItem(String value, IconData icon, String label, PtColors c) => PopupMenuItem(
+      value: value,
+      height: 42,
+      child: Row(children: [
+        Icon(icon, size: 18, color: c.muted),
+        const SizedBox(width: 12),
+        Flexible(child: Text(label, style: ui(14, color: c.fg), overflow: TextOverflow.ellipsis, maxLines: 1)),
+      ]),
+    );
