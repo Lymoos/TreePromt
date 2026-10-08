@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"prompttree/backend/internal/ai"
 	"prompttree/backend/internal/core"
 	"prompttree/backend/internal/realtime"
 	"prompttree/backend/internal/tree"
@@ -22,6 +23,7 @@ type Server struct {
 	auth           *core.AuthService
 	tokens         *core.TokenIssuer
 	tree           *tree.Service
+	ai             *ai.Service
 	hub            *realtime.Hub
 	log            *slog.Logger
 	allowedOrigins []string
@@ -34,8 +36,8 @@ type Options struct {
 	TrustProxy     bool
 }
 
-func New(auth *core.AuthService, tokens *core.TokenIssuer, treeSvc *tree.Service, hub *realtime.Hub, log *slog.Logger, opt Options) *Server {
-	return &Server{auth: auth, tokens: tokens, tree: treeSvc, hub: hub, log: log,
+func New(auth *core.AuthService, tokens *core.TokenIssuer, treeSvc *tree.Service, aiSvc *ai.Service, hub *realtime.Hub, log *slog.Logger, opt Options) *Server {
+	return &Server{auth: auth, tokens: tokens, tree: treeSvc, ai: aiSvc, hub: hub, log: log,
 		allowedOrigins: opt.AllowedOrigins, trustProxy: opt.TrustProxy, limiter: newIPLimiter()}
 }
 
@@ -51,6 +53,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/me", s.authed(s.handleMe))
 	mux.HandleFunc("POST /api/v1/sync/push", s.authed(s.handlePush))
 	mux.HandleFunc("GET /api/v1/sync/pull", s.authed(s.handlePull))
+	mux.HandleFunc("POST /api/v1/ai/structure", s.authed(s.handleStructure))
+	mux.HandleFunc("GET /api/v1/ai/structure/{id}", s.authed(s.handleStructureStatus))
 	mux.HandleFunc("GET /api/v1/ws", s.handleWS)
 	return s.recoverer(s.cors(mux))
 }

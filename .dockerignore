@@ -1,0 +1,10 @@
+# Сборка образа фронта: только исходники
+**/build/
+**/.dart_tool/
+**/.git/
+app-mobile/
+app-desktop/
+backend/bin/
+backend/deploy/web/
+backend/deploy/backups/
+**/.env*

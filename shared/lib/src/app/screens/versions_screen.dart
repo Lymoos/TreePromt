@@ -29,9 +29,7 @@ class VersionsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.pt;
-    final versions = (ref.watch(versionsProvider(nodeId)).valueOrNull ?? const <ContentVersion>[])
-        .where((v) => v.field == 'raw')
-        .toList();
+    final versions = ref.watch(versionsProvider(nodeId)).valueOrNull ?? const <ContentVersion>[];
     return Scaffold(
       appBar: AppBar(title: const Text('История версий')),
       body: FadeSwitcher(
@@ -85,6 +83,18 @@ class VersionsScreen extends ConsumerWidget {
                                   padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
                                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                     Row(children: [
+                                      if (v.field == 'structured') ...[
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: c.fg,
+                                            borderRadius: BorderRadius.circular(99),
+                                          ),
+                                          child: Text('Структура',
+                                              style: ui(11, weight: FontWeight.w600, color: c.bg)),
+                                        ),
+                                        const SizedBox(width: 8),
+                                      ],
                                       Expanded(
                                         child: Text(reasonLabel(v.reason),
                                             style: ui(14, weight: FontWeight.w600, color: c.fg)),

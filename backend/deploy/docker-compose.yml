@@ -1,5 +1,5 @@
-# Развёртывание на VPS: backend + PostgreSQL + Caddy (HTTPS) + ежедневный бэкап.
-# Запуск: cp .env.example .env, заполнить, затем `docker compose up -d --build`.
+# Развёртывание на VPS: backend + PostgreSQL + Caddy с веб-версией + ежедневный бэкап.
+# Образы собирает GitHub Actions (ghcr.io). Установка: deploy/install.sh, обновление: deploy/update.sh.
 services:
   db:
     image: postgres:17-alpine
@@ -16,7 +16,7 @@ services:
       retries: 10
 
   backend:
-    build: ..
+    image: ghcr.io/lymoos/treepromt-backend:${PT_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       db:
@@ -24,23 +24,27 @@ services:
     environment:
       DATABASE_URL: postgres://prompttree:${POSTGRES_PASSWORD}@db:5432/prompttree?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      ALLOWED_ORIGINS: https://${DOMAIN}
+      ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-https://${DOMAIN}}
       ALLOW_REGISTRATION: "false" # регистрация открыта, только пока нет ни одного пользователя
       TRUST_PROXY: "true"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
 
+  # Caddy: HTTPS (Let's Encrypt), веб-версия и прокси /api → backend.
   caddy:
-    image: caddy:2.8-alpine
+    image: ghcr.io/lymoos/treepromt-web:${PT_VERSION:-latest}
     restart: unless-stopped
     depends_on: [backend]
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      # 80 нужен Let's Encrypt для выпуска сертификата. Если 443 занят (например, VPN),
+      # задайте HTTPS_PORT в .env — тогда адрес будет https://домен:порт.
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./web:/srv/web:ro # сборка Flutter Web (этап 5)
       - caddy_data:/data
       - caddy_config:/config
 

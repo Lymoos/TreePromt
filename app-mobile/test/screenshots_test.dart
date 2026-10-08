@@ -1,5 +1,8 @@
 // Скриншоты экранов для визуальной проверки и согласования.
 // Обновить: flutter test --update-goldens test/screenshots_test.dart
+@Tags(['golden'])
+library;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
@@ -147,4 +150,41 @@ void main() {
     await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/trash_dark.png'));
     await tearDownApp(tester, store);
   });
+
+  for (final dark in [false, true]) {
+    final theme = dark ? 'dark' : 'light';
+    testWidgets('structured task ($theme)', (tester) async {
+      await phone(tester, dark: dark);
+      final store = memoryStore();
+      final t = TreeService(store);
+      final p = await t.createProject('PromptTree');
+      final n = await t.createNode(projectId: p, kind: NodeKind.aiTask, name: 'Дерево-проводник', text: 'исходник');
+      await ServerStateApplier(store).node({
+        'id': n, 'project_id': p, 'parent_id': null, 'kind': 'ai_task', 'name': 'Дерево-проводник', 'sort_key': 'V',
+        'revision': 5, 'has_conflict': false, 'created_at': '2026-10-08T00:00:00Z',
+        'updated_at': '2026-10-08T00:00:00Z', 'deleted_at': null,
+        'raw_content': 'хочу левую панель как дерево, чб, минимализм как notion', 'raw_revision': 2,
+        'structured_revision': 5,
+        'structured_content': {
+          'role': 'Act as a senior Flutter developer focused on clean, minimal UI.',
+          'formatted_text': '## Задача\nЛевая панель в виде дерева: проекты → папки → файлы.\n\n'
+              '## Требования\n- чёрно-белая палитра\n- минимализм как в Notion\n- работает на телефоне\n\n'
+              '## Открытые вопросы\n- нужны ли иконки папок?',
+          'human_paragraphs': ['мой абзац'],
+        },
+        'structure_status': 'done',
+        'structure_proposal': {'request_id': 'r1', 'reason': 'flagged', 'findings': [
+          {'code': 'new_term', 'detail': '«Redux» нет в исходнике'}
+        ], 'generated': {'role': 'Act as Y.', 'formatted_text': 'Redux'}},
+      });
+      await tester.pumpWidget(app(store));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('PromptTree').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Дерево-проводник'));
+      await tester.pumpAndSettle();
+      await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/structured_$theme.png'));
+      await tearDownApp(tester, store);
+    });
+  }
 }

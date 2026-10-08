@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"prompttree/backend/internal/ai"
 	"prompttree/backend/internal/core"
 	"prompttree/backend/internal/httpapi"
 	"prompttree/backend/internal/platform/config"
@@ -50,7 +51,19 @@ func run(log *slog.Logger) error {
 	}
 	hub := realtime.NewHub()
 	treeSvc := tree.NewService(pool, hub, log)
-	api := httpapi.New(auth, tokens, treeSvc, hub, log, httpapi.Options{
+
+	var model ai.Model
+	if cfg.GeminiAPIKey != "" {
+		model = ai.NewGemini(cfg.GeminiAPIKey, cfg.GeminiModel).WithBaseURL(cfg.GeminiBaseURL)
+	} else {
+		log.Warn("GEMINI_API_KEY is not set: structuring is disabled")
+	}
+	aiSvc := ai.NewService(treeSvc, model, cfg.AIDailyLimit, log)
+	if err := aiSvc.Start(ctx); err != nil {
+		return err
+	}
+
+	api := httpapi.New(auth, tokens, treeSvc, aiSvc, hub, log, httpapi.Options{
 		AllowedOrigins: cfg.AllowedOrigins,
 		TrustProxy:     cfg.TrustProxy,
 	})

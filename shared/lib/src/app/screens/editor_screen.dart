@@ -27,6 +27,65 @@ class EditorScreen extends StatelessWidget {
       );
 }
 
+enum _Tab { raw, structured }
+
+/// Поле с автосохранением: пишет в БД через [saveDelay] после остановки набора и
+/// подменяет текст, пришедший извне, только когда пользователь не печатает.
+class _Autosave {
+  _Autosave(this.save, {this.onSaving});
+  final Future<void> Function(String text) save;
+
+  /// true — правки ждут записи, false — записаны (для индикатора «сохранено»).
+  final void Function(bool saving)? onSaving;
+  final controller = TextEditingController();
+  Timer? _debounce;
+  DateTime _lastEdit = DateTime.fromMillisecondsSinceEpoch(0);
+  bool loaded = false;
+  bool _dirty = false;
+
+  void load(String text) {
+    controller.text = text;
+    loaded = true;
+  }
+
+  void changed(String _) {
+    _lastEdit = DateTime.now();
+    _debounce?.cancel();
+    _debounce = Timer(saveDelay, flush);
+    if (!_dirty) {
+      _dirty = true;
+      onSaving?.call(true);
+    }
+  }
+
+  Future<void> flush() async {
+    _debounce?.cancel();
+    _debounce = null;
+    if (!loaded) return;
+    await save(controller.text);
+    if (_dirty) {
+      _dirty = false;
+      onSaving?.call(false);
+    }
+  }
+
+  void external(String text) {
+    if (!loaded || text == controller.text) return;
+    if (_debounce != null || DateTime.now().difference(_lastEdit) < const Duration(seconds: 2)) return;
+    final sel = controller.selection;
+    controller.value = TextEditingValue(
+      text: text,
+      selection: sel.isValid && sel.end <= text.length ? sel : TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  void dispose() {
+    _debounce?.cancel();
+    if (loaded) save(controller.text);
+    controller.dispose();
+  }
+}
+
 /// Редактор узла: шапка с путём и меню, текст, панель действий.
 /// На телефоне — экран целиком, на ПК — правая часть окна.
 class EditorPane extends ConsumerStatefulWidget {
@@ -45,87 +104,148 @@ class EditorPane extends ConsumerStatefulWidget {
 }
 
 class _EditorPaneState extends ConsumerState<EditorPane> {
-  final _text = TextEditingController();
-  final _focus = FocusNode();
-  late final AppLifecycleListener _lifecycle;
   // Берём заранее: в dispose() обращаться к ref уже нельзя, а сохранить текст нужно.
   late final TreeService _tree = ref.read(treeServiceProvider);
-  Timer? _debounce;
-  bool _loaded = false;
+  late final _raw = _Autosave((t) => _tree.setText(widget.nodeId, t), onSaving: _onSaving);
+  late final _struct = _Autosave((t) => _tree.setStructuredText(widget.nodeId, t), onSaving: _onSaving);
+  late final AppLifecycleListener _lifecycle;
+  final _rawFocus = FocusNode();
+  _Tab? _tab;
+  bool _requesting = false;
+
+  /// Новая пустая заметка — курсор сразу в тексте.
   bool _autofocus = false;
 
   /// Индикатор в шапке: null — ничего не менялось, false — пишем, true — сохранено.
   bool? _saved;
-  DateTime _lastEdit = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _onSaving(bool saving) {
+    if (mounted) setState(() => _saved = !saving);
+  }
 
   @override
   void initState() {
     super.initState();
-    _tree; // инициализировать до dispose
+    _tree;
     // Свернули, переключились, закрыли — сохраняем сразу, не дожидаясь паузы.
     _lifecycle = AppLifecycleListener(onInactive: _flush, onHide: _flush, onPause: _flush, onDetach: _flush);
     ref.read(storeProvider).content(widget.nodeId).then((c) {
       if (!mounted) return;
-      _text.text = c?.rawContent ?? '';
-      setState(() {
-        _loaded = true;
-        // Новая пустая заметка — сразу можно печатать. autofocus срабатывает,
-        // когда экран снова получает фокус (после закрытия диалога с названием).
-        _autofocus = _text.text.isEmpty;
-      });
+      _raw.load(c?.rawContent ?? '');
+      final doc = StructuredDoc.tryParse(c?.structuredContent);
+      if (doc != null) _struct.load(doc.formattedText);
+      // autofocus срабатывает, когда экран снова получает фокус (после закрытия диалога с названием).
+      setState(() => _autofocus = _raw.controller.text.isEmpty && doc == null);
     });
   }
 
   @override
   void dispose() {
-    _debounce?.cancel();
-    if (_loaded) _tree.setText(widget.nodeId, _text.text);
+    _raw.dispose();
+    _struct.dispose();
     _lifecycle.dispose();
-    _text.dispose();
-    _focus.dispose();
+    _rawFocus.dispose();
     super.dispose();
   }
 
-  void _changed(String _) {
-    _lastEdit = DateTime.now();
-    _debounce?.cancel();
-    _debounce = Timer(saveDelay, _flush);
-    if (_saved != false) setState(() => _saved = false);
-  }
-
   Future<void> _flush() async {
-    _debounce?.cancel();
-    _debounce = null;
-    if (!_loaded) return;
-    await _tree.setText(widget.nodeId, _text.text);
-    if (mounted && _saved == false) setState(() => _saved = true);
+    await _raw.flush();
+    await _struct.flush();
   }
 
-  /// Текст изменился не здесь (другое устройство, откат версии, разбор конфликта).
-  /// Подменяем, только если пользователь сейчас не печатает.
-  void _onExternalContent(NodeContent? c) {
-    if (!_loaded || c == null || c.rawContent == _text.text) return;
-    if (_debounce != null || DateTime.now().difference(_lastEdit) < const Duration(seconds: 2)) return;
-    final sel = _text.selection;
-    _text.value = TextEditingValue(
-      text: c.rawContent,
-      selection:
-          sel.isValid && sel.end <= c.rawContent.length ? sel : TextSelection.collapsed(offset: c.rawContent.length),
-    );
+  void _onContent(NodeContent? c) {
+    if (c == null) return;
+    _raw.external(c.rawContent);
+    final doc = StructuredDoc.tryParse(c.structuredContent);
+    if (doc == null) return;
+    if (!_struct.loaded) {
+      setState(() => _struct.load(doc.formattedText));
+    } else {
+      _struct.external(doc.formattedText);
+    }
   }
 
-  Future<void> _copyTask(TreeNode node) async {
+  void _snack(String text) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// «Структурировать»: сначала отправить правки (сервер структурирует ровно то, что видит
+  /// пользователь), затем поставить запрос. Результат придёт через синхронизацию.
+  Future<void> _structure() async {
+    final session = ref.read(sessionProvider);
+    final api = ref.read(apiProvider);
+    final engine = ref.read(syncEngineProvider);
+    if (session.mode != SessionMode.server || api == null || engine == null) {
+      _snack('Структурирование работает через сервер. Подключите сервер в меню.');
+      return;
+    }
+    setState(() => _requesting = true);
+    final store = ref.read(storeProvider);
+    try {
+      await _flush();
+      for (var attempt = 0; attempt < 2; attempt++) {
+        await engine.syncNow();
+        if ((await store.pendingOpsFor(widget.nodeId)).isNotEmpty) {
+          _snack('Нет связи с сервером: правки ещё не отправлены. Попробуйте, когда появится сеть.');
+          return;
+        }
+        final c = await store.content(widget.nodeId);
+        try {
+          await api.requestStructure(widget.nodeId, c!.rawRevision);
+          engine.schedule(Duration.zero); // подтянуть статус «структурируется…»
+          if (mounted) setState(() => _tab = _Tab.structured);
+          return;
+        } on ApiException catch (e) {
+          if (e.code == 'stale_source' && attempt == 0) continue; // текст успел измениться — синхронизируемся ещё раз
+          rethrow;
+        }
+      }
+    } on NetworkException {
+      _snack('Нет связи с сервером. Попробуйте, когда появится сеть.');
+    } on AuthRequiredException {
+      _snack('Сессия истекла. Войдите снова.');
+    } on ApiException catch (e) {
+      _snack(switch (e.code) {
+        'ai_disabled' => 'На сервере не настроен ключ Gemini.',
+        'ai_daily_limit' => 'Дневной лимит структурирований исчерпан.',
+        'stale_source' => 'Текст меняется на другом устройстве. Попробуйте ещё раз.',
+        _ => 'Не получилось: ${e.message}',
+      });
+    } finally {
+      if (mounted) setState(() => _requesting = false);
+    }
+  }
+
+  Future<void> _copyTask(TreeNode node, StructuredDoc? doc) async {
     await _flush();
-    final text = _text.text.trim();
     if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
+    var text = _raw.controller.text.trim();
+    if (doc != null && doc.formattedText.trim().isNotEmpty) {
+      var useStructure = true;
+      if (node.structureStatus == StructureStatus.stale) {
+        final choice = await showPtDialog<bool>(
+          context,
+          builder: (context) => AlertDialog(
+            title: const Text('Структура устарела'),
+            content: const Text('Исходник менялся после структурирования. Что скопировать?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Исходник')),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Структуру')),
+            ],
+          ),
+        );
+        if (choice == null || !mounted) return;
+        useStructure = choice;
+      }
+      if (useStructure) text = StructuredDoc(role: doc.role, formattedText: _struct.controller.text).finalTask.trim();
+    }
     if (text.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('Задача пустая, копировать нечего')));
+      _snack('Задача пустая, копировать нечего');
       return;
     }
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
-    messenger.showSnackBar(const SnackBar(content: Text('Задача скопирована')));
+    _snack('Задача скопирована');
     final delete = await confirm(
       context,
       title: 'Удалить задачу?',
@@ -173,11 +293,34 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
     return out;
   }
 
+  /// Без рамки: текст стоит прямо на странице, как в Notion.
+  InputDecoration _bare(String hint, PtColors c) => InputDecoration(
+        isCollapsed: true,
+        filled: false,
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        contentPadding: EdgeInsets.zero,
+        hintText: hint,
+        hintStyle: ui(16, color: c.faint, height: 1.65),
+      );
+
+  PopupMenuItem<String> _item(String value, IconData icon, String label, PtColors c) => PopupMenuItem(
+        value: value,
+        height: 40,
+        child: Row(children: [
+          Icon(icon, size: 17, color: c.muted),
+          const SizedBox(width: 12),
+          Flexible(child: Text(label, style: ui(14, color: c.fg), overflow: TextOverflow.ellipsis, maxLines: 1)),
+        ]),
+      );
+
   @override
   Widget build(BuildContext context) {
     final c = context.pt;
-    ref.listen(contentProvider(widget.nodeId), (_, next) => _onExternalContent(next.valueOrNull));
+    ref.listen(contentProvider(widget.nodeId), (_, next) => _onContent(next.valueOrNull));
     final node = ref.watch(nodeProvider(widget.nodeId)).valueOrNull;
+    final content = ref.watch(contentProvider(widget.nodeId)).valueOrNull;
     final hPad = widget.compact ? 20.0 : 48.0;
 
     final crumbs = node == null ? const <String>[] : _crumbs(node);
@@ -232,6 +375,10 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
     if (node == null) return Column(children: [topBar, const Spacer()]);
 
     final isTask = node.kind == NodeKind.aiTask;
+    final doc = StructuredDoc.tryParse(content?.structuredContent);
+    final proposal = isTask ? StructureProposal.tryParse(content?.structureProposal) : null;
+    final pending = node.structureStatus == StructureStatus.pending;
+    final tab = !isTask ? _Tab.raw : (_tab ?? (doc != null ? _Tab.structured : _Tab.raw));
     final status = switch (node.structureStatus) {
       StructureStatus.done => 'структурирована',
       StructureStatus.stale => 'есть правки после структурирования',
@@ -239,7 +386,64 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
       _ => 'не структурирована',
     };
 
-    final content = ListView(
+    // Тело вкладки: исходник или структура.
+    final Widget body;
+    if (tab == _Tab.raw) {
+      body = !_raw.loaded
+          ? const SizedBox(key: ValueKey('raw-loading'), height: 200)
+          : KeyedSubtree(
+              key: const ValueKey('raw'),
+              child: TextField(
+                key: const Key('editor-text'),
+                controller: _raw.controller,
+                focusNode: _rawFocus,
+                autofocus: _autofocus,
+                onChanged: _raw.changed,
+                maxLines: null,
+                minLines: 12,
+                keyboardType: TextInputType.multiline,
+                textCapitalization: TextCapitalization.sentences,
+                style: ui(16, color: c.fg, height: 1.65),
+                decoration: _bare(isTask ? 'Опишите задачу как есть, своими словами…' : 'Пишите как есть…', c),
+              ),
+            );
+    } else if (doc == null) {
+      body = _StructureEmpty(key: ValueKey('empty-$pending'), pending: pending);
+    } else {
+      body = Column(key: const ValueKey('structured'), crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (doc.role.isNotEmpty) ...[
+          _RoleCard(role: doc.role),
+          const SizedBox(height: 18),
+        ],
+        if (_struct.loaded)
+          TextField(
+            key: const Key('structured-text'),
+            controller: _struct.controller,
+            onChanged: _struct.changed,
+            maxLines: null,
+            minLines: 8,
+            keyboardType: TextInputType.multiline,
+            style: ui(16, color: c.fg, height: 1.65),
+            decoration: _bare('', c),
+          ),
+        if (doc.humanParagraphs.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 18),
+            child: Row(children: [
+              Icon(Icons.edit_note_rounded, size: 16, color: c.muted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Ваших абзацев: ${doc.humanParagraphs.length}. При повторном структурировании ИИ оставит их как есть.',
+                  style: ui(12.5, color: c.muted, height: 1.4),
+                ),
+              ),
+            ]),
+          ),
+      ]);
+    }
+
+    final scroll = ListView(
       padding: EdgeInsets.fromLTRB(hPad, widget.compact ? 8 : 32, hPad, 32),
       children: [
         Align(
@@ -258,7 +462,8 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
                       child: Text(
                         node.name,
                         key: ValueKey(node.name),
-                        style: ui(widget.compact ? 26 : 30, weight: FontWeight.w700, color: c.fg, letterSpacing: -0.6, height: 1.2),
+                        style: ui(widget.compact ? 26 : 30,
+                            weight: FontWeight.w700, color: c.fg, letterSpacing: -0.6, height: 1.2),
                       ),
                     ),
                   ),
@@ -273,11 +478,22 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
                     marker: markerFor(kind: node.kind, structureStatus: node.structureStatus),
                     label: isTask ? 'AI Task' : 'Raw Note',
                   ),
-                  AnimatedSize(
-                    duration: PtMotion.normal,
-                    curve: PtMotion.curve,
-                    child: isTask ? Text(status, style: ui(12.5, color: c.muted)) : const SizedBox.shrink(),
-                  ),
+                  if (isTask)
+                    AnimatedSwitcher(
+                      duration: PtMotion.normal,
+                      transitionBuilder: (child, a) => FadeTransition(opacity: a, child: child),
+                      child: Row(key: ValueKey(status), mainAxisSize: MainAxisSize.min, children: [
+                        if (pending) ...[
+                          SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(strokeWidth: 1.5, color: c.muted),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        Text(status, style: ui(12.5, color: c.muted)),
+                      ]),
+                    ),
                   if (node.syncError != null)
                     Row(mainAxisSize: MainAxisSize.min, children: [
                       Icon(Icons.cloud_off_rounded, size: 14, color: c.muted),
@@ -290,64 +506,84 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
                 duration: PtMotion.normal,
                 curve: PtMotion.curve,
                 alignment: Alignment.topLeft,
-                child: node.hasConflict
-                    ? Padding(
-                        padding: const EdgeInsets.only(top: 16),
-                        child: _ConflictBanner(onOpen: () async {
-                          await _flush();
-                          if (context.mounted) {
-                            await Navigator.push(
-                                context, MaterialPageRoute(builder: (_) => ConflictScreen(nodeId: node.id)));
-                          }
-                        }),
-                      )
-                    : const SizedBox(width: double.infinity),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  const SizedBox(width: double.infinity),
+                  if (node.hasConflict)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: _Banner(
+                        icon: Icons.call_split_rounded,
+                        text: 'Текст изменили на двух устройствах. Обе версии сохранены.',
+                        actions: [
+                          TextButton(
+                            key: const Key('open-conflict'),
+                            onPressed: () async {
+                              await _flush();
+                              if (context.mounted) {
+                                await Navigator.push(
+                                    context, MaterialPageRoute(builder: (_) => ConflictScreen(nodeId: node.id)));
+                              }
+                            },
+                            child: const Text('Разобрать'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (proposal != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: _ProposalBanner(
+                        proposal: proposal,
+                        onApply: () => _tree.applyProposal(node.id, proposal.requestId),
+                        onDismiss: () => _tree.dismissProposal(node.id, proposal.requestId),
+                        onRetry: _structure,
+                      ),
+                    ),
+                ]),
               ),
               const SizedBox(height: 20),
-              Divider(height: 1, color: c.line),
-              const SizedBox(height: 20),
-              if (_loaded)
-                FadeSlideIn(
-                  delay: const Duration(milliseconds: 100),
-                  offset: const Offset(0, 6),
-                  child: TextField(
-                    key: const Key('editor-text'),
-                    controller: _text,
-                    focusNode: _focus,
-                    autofocus: _autofocus,
-                    onChanged: _changed,
-                    maxLines: null,
-                    minLines: 12,
-                    keyboardType: TextInputType.multiline,
-                    textCapitalization: TextCapitalization.sentences,
-                    style: ui(16, color: c.fg, height: 1.65),
-                    // Без рамки: текст стоит прямо на странице, как в Notion.
-                    decoration: InputDecoration(
-                      isCollapsed: true,
-                      filled: false,
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      contentPadding: EdgeInsets.zero,
-                      hintText: isTask ? 'Опишите задачу как есть, своими словами…' : 'Пишите как есть…',
-                      hintStyle: ui(16, color: c.faint, height: 1.65),
-                    ),
+              if (isTask)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 20),
+                  child: _Seg(
+                    value: tab,
+                    hasStructure: doc != null,
+                    onChanged: (t) async {
+                      await _flush();
+                      setState(() => _tab = t);
+                    },
                   ),
-                ),
+                )
+              else ...[
+                Divider(height: 1, color: c.line),
+                const SizedBox(height: 20),
+              ],
+              FadeSwitcher(offset: 0.015, child: body),
             ]),
           ),
         ),
       ],
     );
 
+    final busy = pending || _requesting;
     final buttons = Row(children: [
       if (isTask) ...[
-        Tooltip(
-          message: 'Появится вместе с AI Structuring Engine (этап 6)',
-          child: FilledButton.icon(
-            onPressed: null,
-            icon: const Icon(Icons.auto_awesome_outlined, size: 16),
-            label: const Text('Структурировать'),
+        FilledButton(
+          key: const Key('structure'),
+          onPressed: busy ? null : _structure,
+          child: AnimatedSwitcher(
+            duration: PtMotion.fast,
+            child: busy
+                ? Row(key: const ValueKey('busy'), mainAxisSize: MainAxisSize.min, children: [
+                    SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: c.faint)),
+                    const SizedBox(width: 8),
+                    Text(widget.compact ? 'ИИ работает…' : 'Структурируется…'),
+                  ])
+                : Row(key: ValueKey(doc == null), mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.auto_awesome_outlined, size: 16),
+                    const SizedBox(width: 8),
+                    Text(doc == null ? 'Структурировать' : (widget.compact ? 'Заново' : 'Структурировать заново')),
+                  ]),
           ),
         ),
         const SizedBox(width: 8),
@@ -355,7 +591,7 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
           fit: widget.compact ? FlexFit.tight : FlexFit.loose,
           child: OutlinedButton.icon(
             key: const Key('copy-task'),
-            onPressed: () => _copyTask(node),
+            onPressed: () => _copyTask(node, doc),
             icon: const Icon(Icons.content_copy_rounded, size: 16),
             label: Text(widget.compact ? 'Копировать' : 'Скопировать задачу', overflow: TextOverflow.ellipsis),
           ),
@@ -372,10 +608,7 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
     ]);
 
     final actions = Container(
-      decoration: BoxDecoration(
-        color: c.bg,
-        border: Border(top: BorderSide(color: c.line)),
-      ),
+      decoration: BoxDecoration(color: c.bg, border: Border(top: BorderSide(color: c.line))),
       padding: EdgeInsets.fromLTRB(widget.compact ? 16 : hPad, 12, widget.compact ? 16 : hPad, 12),
       child: SafeArea(
         top: false,
@@ -397,23 +630,13 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
     return Column(children: [
       topBar,
       if (!widget.compact) Divider(height: 1, color: c.line),
-      Expanded(child: content),
+      Expanded(child: scroll),
       actions,
     ]);
   }
-
-  PopupMenuItem<String> _item(String value, IconData icon, String label, PtColors c) => PopupMenuItem(
-        value: value,
-        height: 40,
-        child: Row(children: [
-          Icon(icon, size: 17, color: c.muted),
-          const SizedBox(width: 12),
-          Flexible(child: Text(label, style: ui(14, color: c.fg), overflow: TextOverflow.ellipsis, maxLines: 1)),
-        ]),
-      );
 }
 
-/// «Сохранено» в шапке: появляется после паузы в наборе и тихо гаснет.
+/// «Сохранено» в шапке: появляется после паузы в наборе.
 class _SaveIndicator extends StatelessWidget {
   const _SaveIndicator({required this.saved});
   final bool? saved;
@@ -441,6 +664,179 @@ class _SaveIndicator extends StatelessWidget {
             ]),
           ),
       },
+    );
+  }
+}
+
+/// Переключатель «Исходник / Структура»: плашка плавно переезжает под выбранную вкладку.
+class _Seg extends StatelessWidget {
+  const _Seg({required this.value, required this.onChanged, required this.hasStructure});
+  final _Tab value;
+  final bool hasStructure;
+  final ValueChanged<_Tab> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.pt;
+    const w = 140.0, h = 34.0;
+    Widget item(_Tab t, String label, IconData icon) {
+      final on = t == value;
+      return Semantics(
+        selected: on,
+        button: true,
+        child: MouseRegion(
+          cursor: on ? MouseCursor.defer : SystemMouseCursors.click,
+          child: GestureDetector(
+            key: Key('tab-${t.name}'),
+            behavior: HitTestBehavior.opaque,
+            onTap: on ? null : () => onChanged(t),
+            child: SizedBox(
+              width: w,
+              height: h,
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(icon, size: 15, color: on ? c.fg : c.muted),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: AnimatedDefaultTextStyle(
+                    duration: PtMotion.fast,
+                    style: ui(13, weight: on ? FontWeight.w600 : FontWeight.w500, color: on ? c.fg : c.muted),
+                    child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+                if (t == _Tab.structured && hasStructure && !on) ...[
+                  const SizedBox(width: 6),
+                  Container(width: 5, height: 5, decoration: BoxDecoration(color: c.fg, shape: BoxShape.circle)),
+                ],
+              ]),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: c.panel,
+        border: Border.all(color: c.line),
+        borderRadius: BorderRadius.circular(PtRadius.md),
+      ),
+      child: Stack(children: [
+        AnimatedPositioned(
+          duration: PtMotion.normal,
+          curve: PtMotion.curve,
+          left: value == _Tab.raw ? 0 : w,
+          top: 0,
+          width: w,
+          height: h,
+          child: Container(
+            decoration: BoxDecoration(
+              color: c.card,
+              borderRadius: BorderRadius.circular(PtRadius.sm + 1),
+              border: Border.all(color: c.line),
+              boxShadow: c.elevation(0.4),
+            ),
+          ),
+        ),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          item(_Tab.raw, 'Исходник', Icons.notes_rounded),
+          item(_Tab.structured, 'Структура', Icons.auto_awesome_outlined),
+        ]),
+      ]),
+    );
+  }
+}
+
+/// Вкладка «Структура», пока результата нет: пояснение или «ИИ работает».
+class _StructureEmpty extends StatelessWidget {
+  const _StructureEmpty({super.key, required this.pending});
+  final bool pending;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.pt;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+      decoration: BoxDecoration(
+        color: c.panel,
+        borderRadius: BorderRadius.circular(PtRadius.lg),
+        border: Border.all(color: c.line),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: c.card,
+            borderRadius: BorderRadius.circular(PtRadius.sm + 2),
+            border: Border.all(color: c.line),
+          ),
+          child: Center(
+            child: pending
+                ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 1.8, color: c.fg))
+                : Icon(Icons.auto_awesome_outlined, size: 18, color: c.fg),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(pending ? 'ИИ приводит исходник в порядок' : 'Структуры пока нет',
+                style: ui(15, weight: FontWeight.w600, color: c.fg)),
+            const SizedBox(height: 4),
+            Text(
+              pending
+                  ? 'Можно продолжать писать — правки не потеряются.'
+                  : '«Структурировать» приведёт исходник в порядок: ИИ только чистит и группирует, '
+                      'ничего не добавляя. Неясное он вынесет в открытые вопросы.',
+              style: ui(14, color: c.muted, height: 1.5),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Роль для Claude — карточка над текстом структуры.
+class _RoleCard extends StatelessWidget {
+  const _RoleCard({required this.role});
+  final String role;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.pt;
+    return FadeSlideIn(
+      offset: const Offset(0, 6),
+      child: Container(
+        width: double.infinity,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: c.panel,
+          borderRadius: BorderRadius.circular(PtRadius.md),
+          border: Border.all(color: c.line),
+        ),
+        // Тёмная полоса слева отмечает роль, как цитату.
+        child: IntrinsicHeight(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Container(width: 3, color: c.fg),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.person_outline_rounded, size: 14, color: c.muted),
+            const SizedBox(width: 6),
+            Text('РОЛЬ', style: mono(10.5, color: c.muted, letterSpacing: 0.8, weight: FontWeight.w500)),
+          ]),
+          const SizedBox(height: 6),
+          SelectableText(role, style: ui(14.5, color: c.fg, height: 1.5)),
+                ]),
+              ),
+            ),
+          ]),
+        ),
+      ),
     );
   }
 }
@@ -475,30 +871,89 @@ class _Pill extends StatelessWidget {
   }
 }
 
-class _ConflictBanner extends StatelessWidget {
-  const _ConflictBanner({required this.onOpen});
-  final VoidCallback onOpen;
+/// Плашка над текстом: значок, сообщение, подробности и действия.
+class _Banner extends StatelessWidget {
+  const _Banner({super.key, required this.icon, required this.text, required this.actions, this.details = const []});
+  final IconData icon;
+  final String text;
+  final List<String> details;
+  final List<Widget> actions;
 
   @override
   Widget build(BuildContext context) {
     final c = context.pt;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
-      decoration: BoxDecoration(
-        color: c.card,
-        border: Border.all(color: c.fg),
-        borderRadius: BorderRadius.circular(PtRadius.md + 2),
-        boxShadow: c.elevation(0.6),
-      ),
-      child: Row(children: [
-        Icon(Icons.call_split_rounded, size: 18, color: c.fg),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text('Текст изменили на двух устройствах. Обе версии сохранены.',
-              style: ui(13.5, color: c.fg, height: 1.4)),
+    return FadeSlideIn(
+      offset: const Offset(0, -6),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 12, 8, 6),
+        decoration: BoxDecoration(
+          color: c.card,
+          border: Border.all(color: c.fg),
+          borderRadius: BorderRadius.circular(PtRadius.md + 2),
+          boxShadow: c.elevation(0.6),
         ),
-        TextButton(key: const Key('open-conflict'), onPressed: onOpen, child: const Text('Разобрать')),
-      ]),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(padding: const EdgeInsets.only(top: 1), child: Icon(icon, size: 18, color: c.fg)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Text(text, style: ui(13.5, color: c.fg, height: 1.45)),
+                ),
+                for (final d in details)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, right: 6),
+                    child: Text('— $d', style: ui(12.5, color: c.muted, height: 1.4)),
+                  ),
+              ]),
+            ),
+          ]),
+          Wrap(alignment: WrapAlignment.end, children: actions),
+        ]),
+      ),
     );
   }
+}
+
+/// Результат ИИ, который сервер не применил сам (ТЗ п. 6.2, 6.5).
+class _ProposalBanner extends StatelessWidget {
+  const _ProposalBanner({required this.proposal, required this.onApply, required this.onDismiss, required this.onRetry});
+  final StructureProposal proposal;
+  final VoidCallback onApply, onDismiss, onRetry;
+
+  @override
+  Widget build(BuildContext context) => switch (proposal.reason) {
+        StructureProposal.stale => _Banner(
+            key: const Key('proposal-stale'),
+            icon: Icons.update_rounded,
+            text: 'Пока ИИ работал, исходник изменился. Результат не применён, чтобы не потерять ваши правки.',
+            actions: [
+              TextButton(onPressed: onDismiss, child: const Text('Отклонить')),
+              TextButton(onPressed: onRetry, child: const Text('Структурировать заново')),
+              TextButton(onPressed: onApply, child: const Text('Применить')),
+            ],
+          ),
+        StructureProposal.flagged => _Banner(
+            key: const Key('proposal-flagged'),
+            icon: Icons.policy_outlined,
+            text: 'Проверка нашла в ответе ИИ то, чего нет в исходнике. Результат не применён.',
+            details: [for (final f in proposal.findings) f.detail],
+            actions: [
+              TextButton(onPressed: onDismiss, child: const Text('Отклонить')),
+              TextButton(onPressed: onApply, child: const Text('Применить всё равно')),
+            ],
+          ),
+        _ => _Banner(
+            key: const Key('proposal-failed'),
+            icon: Icons.error_outline_rounded,
+            text: proposal.error ?? 'Не удалось структурировать.',
+            actions: [
+              TextButton(onPressed: onDismiss, child: const Text('Скрыть')),
+              TextButton(onPressed: onRetry, child: const Text('Повторить')),
+            ],
+          ),
+      };
 }

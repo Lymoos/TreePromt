@@ -4,7 +4,7 @@
 
 | Папка | Что внутри |
 |---|---|
-| `docs/` | согласованные решения: [P0](docs/P0-decisions.md), [архитектура PromptTree](docs/architecture-prompttree.md) |
+| `docs/` | решения: [P0](docs/P0-decisions.md), [архитектура PromptTree](docs/architecture-prompttree.md), [этап 6 — ИИ](docs/stage6-ai-structuring.md), [этап 7.1 — AiCrew](docs/stage7-1-aicrew-architecture.md) |
 | `design/` | дизайн-концепт и [решения по дизайну](design/DECISIONS.md) |
 | `backend/` | сервер на Go + PostgreSQL ([README](backend/README.md)) |
 | `shared/` | общий код Flutter: локальная БД, синхронизация, API, общие экраны и виджеты |

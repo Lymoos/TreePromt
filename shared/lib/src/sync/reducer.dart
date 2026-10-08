@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../domain/local_store.dart';
 import '../models/ops.dart';
 
@@ -65,9 +67,23 @@ Future<void> applyLocal(LocalStore s, String type, String entityId, Map<String, 
       await s.patchNode(entityId, NodesCompanion(updatedAt: Value(now)));
     case OpType.restoreVersion:
       final v = await s.version(p['version_id'] as String);
-      if (v != null) {
+      if (v == null) return;
+      if (v.field == 'structured') {
+        await applyLocal(s, OpType.setStructuredText, entityId, {'text': v.content}, now);
+      } else {
         await s.patchContent(entityId, NodeContentsCompanion(rawContent: Value(v.content)));
       }
+    case OpType.setStructuredText:
+      final c = await s.content(entityId);
+      final doc = c?.structuredContent == null ? null : jsonDecode(c!.structuredContent!) as Map<String, dynamic>;
+      if (doc != null) {
+        doc['formatted_text'] = p['text'] as String;
+        await s.patchContent(entityId, NodeContentsCompanion(structuredContent: Value(jsonEncode(doc))));
+      }
+    case OpType.applyProposal:
+    case OpType.dismissProposal:
+      // Итог применения считает сервер (абзацы человека, статус); локально убираем плашку.
+      await s.patchContent(entityId, const NodeContentsCompanion(structureProposal: Value(null)));
     case OpType.resolveConflict:
       await s.patchContent(entityId, NodeContentsCompanion(rawContent: Value(p['content'] as String)));
       await s.patchNode(entityId, NodesCompanion(hasConflict: const Value(false), updatedAt: Value(now)));

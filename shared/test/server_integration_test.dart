@@ -85,4 +85,59 @@ void main() {
       await d.store.db.close();
     }
   }, skip: url == null ? 'PT_SERVER_URL is not set' : false);
+
+  // Требует сервер с GEMINI_API_KEY и GEMINI_BASE_URL на имитацию Gemini (см. README).
+  test('structuring: result syncs to both devices, hallucination becomes a proposal', () async {
+    final server = Uri.parse(url!);
+    final email = 'ai-${newId()}@example.com';
+    const password = 'длинный-пароль-1';
+    await ApiClient(baseUrl: server, tokens: MemoryTokenStore()).register(email, password);
+    final phone = Device(server, 'phone');
+    final pc = Device(server, 'pc');
+    await phone.login(email, password);
+    await pc.login(email, password);
+
+    final p = await phone.tree.createProject('P');
+    final n = await phone.tree.createNode(projectId: p, kind: NodeKind.aiTask, name: 'Задача', text: 'нужна кнопка входа');
+    await phone.sync();
+
+    Future<NodeContent> structure(Device d) async {
+      await d.client.requestStructure(n, (await d.store.content(n))!.rawRevision);
+      for (var i = 0; i < 50; i++) {
+        await d.sync();
+        if ((await d.store.node(n))!.structureStatus != StructureStatus.pending) break;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      return (await d.store.content(n))!;
+    }
+
+    var c = await structure(phone);
+    expect((await phone.store.node(n))!.structureStatus, StructureStatus.done);
+    expect(StructuredDoc.tryParse(c.structuredContent)!.finalTask, startsWith('Act as a Senior Engineer.'));
+
+    // Человек правит структуру на ПК — правка доходит до телефона.
+    await pc.sync();
+    final before = StructuredDoc.tryParse((await pc.store.content(n))!.structuredContent)!.formattedText;
+    final edited = '$before\n\nКнопка чёрная.';
+    await pc.tree.setStructuredText(n, edited);
+    await pc.sync();
+    await phone.sync();
+    final doc = StructuredDoc.tryParse((await phone.store.content(n))!.structuredContent)!;
+    expect(doc.formattedText, edited);
+    expect(doc.humanParagraphs, ['Кнопка чёрная.']);
+
+    // Имитация «галлюцинирует»: результат не применён, предложение с замечанием.
+    await phone.tree.setText(n, 'нужна кнопка входа, галлюцинация');
+    await phone.sync();
+    c = await structure(phone);
+    final proposal = StructureProposal.tryParse(c.structureProposal);
+    expect(proposal?.reason, StructureProposal.flagged);
+    expect(proposal!.findings.map((f) => f.detail).join(), contains('Redis'));
+    expect(StructuredDoc.tryParse(c.structuredContent)!.formattedText, edited, reason: 'structure must stay');
+
+    for (final d in [phone, pc]) {
+      await d.engine.dispose();
+      await d.store.db.close();
+    }
+  }, skip: url == null ? 'PT_SERVER_URL is not set' : false);
 }
