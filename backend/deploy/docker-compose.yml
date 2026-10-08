@@ -27,6 +27,9 @@ services:
       ALLOWED_ORIGINS: https://${DOMAIN}
       ALLOW_REGISTRATION: "false" # регистрация открыта, только пока нет ни одного пользователя
       TRUST_PROXY: "true"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
 
   caddy:
     image: caddy:2.8-alpine

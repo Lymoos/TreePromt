@@ -52,6 +52,12 @@ class NodeContents extends Table {
   IntColumn get rawRevision => integer().withDefault(const Constant(0))();
   TextColumn get structuredContent => text().nullable()();
 
+  /// Ревизия структуры, подтверждённая сервером. Это base_revision для set_structured_text. С v2.
+  IntColumn get structuredRevision => integer().withDefault(const Constant(0))();
+
+  /// Результат ИИ, который не применён автоматически (JSON). С v2.
+  TextColumn get structureProposal => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {nodeId};
 }
@@ -100,7 +106,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -110,7 +116,14 @@ class AppDatabase extends _$AppDatabase {
           await m.createIndex(Index('outbox_entity', 'CREATE INDEX outbox_entity ON outbox (entity_id, seq)'));
           await m.createIndex(Index('versions_node', 'CREATE INDEX versions_node ON content_versions (node_id)'));
         },
-        // Будущие миграции — шаги по schemaVersion, каждый с тестом (ТЗ п. 16).
+        // Шаги по schemaVersion, каждый с тестом (ТЗ п. 16; test/migration_test.dart).
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            // v2 — этап 6: ревизия структуры и отложенный результат ИИ.
+            await m.addColumn(nodeContents, nodeContents.structuredRevision);
+            await m.addColumn(nodeContents, nodeContents.structureProposal);
+          }
+        },
         beforeOpen: (details) async {
           // WAL: запись не блокирует чтение и переживает падение процесса.
           // В вебе (WASM) прагма не поддерживается — там это не ошибка.

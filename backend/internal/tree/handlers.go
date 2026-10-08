@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -137,14 +138,21 @@ func (oc *opCtx) checkParent(projectID, parentID uuid.UUID) error {
 }
 
 func (oc *opCtx) insertVersion(nodeID, projectID uuid.UUID, content string, atRevision int64, reason string) error {
-	_, err := oc.tx.Exec(oc.ctx, `INSERT INTO tree.content_versions
+	return insertVersion(oc.ctx, oc.tx, nodeID, projectID, "raw", content, atRevision, reason, &oc.actor.DeviceID, oc.rev)
+}
+
+func insertVersion(ctx context.Context, tx pgx.Tx, nodeID, projectID uuid.UUID, field, content string,
+	atRevision int64, reason string, deviceID *uuid.UUID, rev int64) error {
+	_, err := tx.Exec(ctx, `INSERT INTO tree.content_versions
 		(id, node_id, project_id, field, content, at_revision, reason, device_id, server_revision)
-		VALUES ($1, $2, $3, 'raw', $4, $5, $6, $7, $8)`,
-		uuid.Must(uuid.NewV7()), nodeID, projectID, content, atRevision, reason, oc.actor.DeviceID, oc.rev)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		uuid.Must(uuid.NewV7()), nodeID, projectID, field, content, atRevision, reason, deviceID, rev)
 	return err
 }
 
-func applied(projectID uuid.UUID) outcome { return outcome{result: ResultApplied, projectID: projectID} }
+func applied(projectID uuid.UUID) outcome {
+	return outcome{result: ResultApplied, projectID: projectID}
+}
 
 // ── проекты ──
 
@@ -546,8 +554,11 @@ func (oc *opCtx) restoreVersion() (outcome, error) {
 	if err != nil {
 		return outcome{}, err
 	}
-	if field != "raw" {
-		return outcome{}, reject(CodeUnsupported, "restoring structured versions arrives with the AI engine")
+	if field == "structured" {
+		if err := oc.restoreStructuredVersion(content); err != nil {
+			return outcome{}, err
+		}
+		return applied(n.projectID), oc.audit("node", oc.op.EntityID, "restore_version", nil, map[string]any{"version_id": p.VersionID})
 	}
 	cur, err := oc.lockContent()
 	if err != nil {

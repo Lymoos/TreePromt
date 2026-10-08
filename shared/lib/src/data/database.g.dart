@@ -1141,9 +1141,29 @@ class $NodeContentsTable extends NodeContents
   late final GeneratedColumn<String> structuredContent =
       GeneratedColumn<String>('structured_content', aliasedName, true,
           type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _structuredRevisionMeta =
+      const VerificationMeta('structuredRevision');
   @override
-  List<GeneratedColumn> get $columns =>
-      [nodeId, rawContent, rawRevision, structuredContent];
+  late final GeneratedColumn<int> structuredRevision = GeneratedColumn<int>(
+      'structured_revision', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _structureProposalMeta =
+      const VerificationMeta('structureProposal');
+  @override
+  late final GeneratedColumn<String> structureProposal =
+      GeneratedColumn<String>('structure_proposal', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        nodeId,
+        rawContent,
+        rawRevision,
+        structuredContent,
+        structuredRevision,
+        structureProposal
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1178,6 +1198,18 @@ class $NodeContentsTable extends NodeContents
           structuredContent.isAcceptableOrUnknown(
               data['structured_content']!, _structuredContentMeta));
     }
+    if (data.containsKey('structured_revision')) {
+      context.handle(
+          _structuredRevisionMeta,
+          structuredRevision.isAcceptableOrUnknown(
+              data['structured_revision']!, _structuredRevisionMeta));
+    }
+    if (data.containsKey('structure_proposal')) {
+      context.handle(
+          _structureProposalMeta,
+          structureProposal.isAcceptableOrUnknown(
+              data['structure_proposal']!, _structureProposalMeta));
+    }
     return context;
   }
 
@@ -1195,6 +1227,10 @@ class $NodeContentsTable extends NodeContents
           .read(DriftSqlType.int, data['${effectivePrefix}raw_revision'])!,
       structuredContent: attachedDatabase.typeMapping.read(
           DriftSqlType.string, data['${effectivePrefix}structured_content']),
+      structuredRevision: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}structured_revision'])!,
+      structureProposal: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}structure_proposal']),
     );
   }
 
@@ -1211,11 +1247,19 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
   /// Ревизия текста, подтверждённая сервером. Это base_revision для set_raw_content.
   final int rawRevision;
   final String? structuredContent;
+
+  /// Ревизия структуры, подтверждённая сервером. Это base_revision для set_structured_text. С v2.
+  final int structuredRevision;
+
+  /// Результат ИИ, который не применён автоматически (JSON). С v2.
+  final String? structureProposal;
   const NodeContent(
       {required this.nodeId,
       required this.rawContent,
       required this.rawRevision,
-      this.structuredContent});
+      this.structuredContent,
+      required this.structuredRevision,
+      this.structureProposal});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -1224,6 +1268,10 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
     map['raw_revision'] = Variable<int>(rawRevision);
     if (!nullToAbsent || structuredContent != null) {
       map['structured_content'] = Variable<String>(structuredContent);
+    }
+    map['structured_revision'] = Variable<int>(structuredRevision);
+    if (!nullToAbsent || structureProposal != null) {
+      map['structure_proposal'] = Variable<String>(structureProposal);
     }
     return map;
   }
@@ -1236,6 +1284,10 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
       structuredContent: structuredContent == null && nullToAbsent
           ? const Value.absent()
           : Value(structuredContent),
+      structuredRevision: Value(structuredRevision),
+      structureProposal: structureProposal == null && nullToAbsent
+          ? const Value.absent()
+          : Value(structureProposal),
     );
   }
 
@@ -1248,6 +1300,9 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
       rawRevision: serializer.fromJson<int>(json['rawRevision']),
       structuredContent:
           serializer.fromJson<String?>(json['structuredContent']),
+      structuredRevision: serializer.fromJson<int>(json['structuredRevision']),
+      structureProposal:
+          serializer.fromJson<String?>(json['structureProposal']),
     );
   }
   @override
@@ -1258,6 +1313,8 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
       'rawContent': serializer.toJson<String>(rawContent),
       'rawRevision': serializer.toJson<int>(rawRevision),
       'structuredContent': serializer.toJson<String?>(structuredContent),
+      'structuredRevision': serializer.toJson<int>(structuredRevision),
+      'structureProposal': serializer.toJson<String?>(structureProposal),
     };
   }
 
@@ -1265,7 +1322,9 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
           {String? nodeId,
           String? rawContent,
           int? rawRevision,
-          Value<String?> structuredContent = const Value.absent()}) =>
+          Value<String?> structuredContent = const Value.absent(),
+          int? structuredRevision,
+          Value<String?> structureProposal = const Value.absent()}) =>
       NodeContent(
         nodeId: nodeId ?? this.nodeId,
         rawContent: rawContent ?? this.rawContent,
@@ -1273,6 +1332,10 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
         structuredContent: structuredContent.present
             ? structuredContent.value
             : this.structuredContent,
+        structuredRevision: structuredRevision ?? this.structuredRevision,
+        structureProposal: structureProposal.present
+            ? structureProposal.value
+            : this.structureProposal,
       );
   NodeContent copyWithCompanion(NodeContentsCompanion data) {
     return NodeContent(
@@ -1284,6 +1347,12 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
       structuredContent: data.structuredContent.present
           ? data.structuredContent.value
           : this.structuredContent,
+      structuredRevision: data.structuredRevision.present
+          ? data.structuredRevision.value
+          : this.structuredRevision,
+      structureProposal: data.structureProposal.present
+          ? data.structureProposal.value
+          : this.structureProposal,
     );
   }
 
@@ -1293,14 +1362,16 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
           ..write('nodeId: $nodeId, ')
           ..write('rawContent: $rawContent, ')
           ..write('rawRevision: $rawRevision, ')
-          ..write('structuredContent: $structuredContent')
+          ..write('structuredContent: $structuredContent, ')
+          ..write('structuredRevision: $structuredRevision, ')
+          ..write('structureProposal: $structureProposal')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(nodeId, rawContent, rawRevision, structuredContent);
+  int get hashCode => Object.hash(nodeId, rawContent, rawRevision,
+      structuredContent, structuredRevision, structureProposal);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1308,7 +1379,9 @@ class NodeContent extends DataClass implements Insertable<NodeContent> {
           other.nodeId == this.nodeId &&
           other.rawContent == this.rawContent &&
           other.rawRevision == this.rawRevision &&
-          other.structuredContent == this.structuredContent);
+          other.structuredContent == this.structuredContent &&
+          other.structuredRevision == this.structuredRevision &&
+          other.structureProposal == this.structureProposal);
 }
 
 class NodeContentsCompanion extends UpdateCompanion<NodeContent> {
@@ -1316,12 +1389,16 @@ class NodeContentsCompanion extends UpdateCompanion<NodeContent> {
   final Value<String> rawContent;
   final Value<int> rawRevision;
   final Value<String?> structuredContent;
+  final Value<int> structuredRevision;
+  final Value<String?> structureProposal;
   final Value<int> rowid;
   const NodeContentsCompanion({
     this.nodeId = const Value.absent(),
     this.rawContent = const Value.absent(),
     this.rawRevision = const Value.absent(),
     this.structuredContent = const Value.absent(),
+    this.structuredRevision = const Value.absent(),
+    this.structureProposal = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   NodeContentsCompanion.insert({
@@ -1329,6 +1406,8 @@ class NodeContentsCompanion extends UpdateCompanion<NodeContent> {
     this.rawContent = const Value.absent(),
     this.rawRevision = const Value.absent(),
     this.structuredContent = const Value.absent(),
+    this.structuredRevision = const Value.absent(),
+    this.structureProposal = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : nodeId = Value(nodeId);
   static Insertable<NodeContent> custom({
@@ -1336,6 +1415,8 @@ class NodeContentsCompanion extends UpdateCompanion<NodeContent> {
     Expression<String>? rawContent,
     Expression<int>? rawRevision,
     Expression<String>? structuredContent,
+    Expression<int>? structuredRevision,
+    Expression<String>? structureProposal,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1343,6 +1424,8 @@ class NodeContentsCompanion extends UpdateCompanion<NodeContent> {
       if (rawContent != null) 'raw_content': rawContent,
       if (rawRevision != null) 'raw_revision': rawRevision,
       if (structuredContent != null) 'structured_content': structuredContent,
+      if (structuredRevision != null) 'structured_revision': structuredRevision,
+      if (structureProposal != null) 'structure_proposal': structureProposal,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1352,12 +1435,16 @@ class NodeContentsCompanion extends UpdateCompanion<NodeContent> {
       Value<String>? rawContent,
       Value<int>? rawRevision,
       Value<String?>? structuredContent,
+      Value<int>? structuredRevision,
+      Value<String?>? structureProposal,
       Value<int>? rowid}) {
     return NodeContentsCompanion(
       nodeId: nodeId ?? this.nodeId,
       rawContent: rawContent ?? this.rawContent,
       rawRevision: rawRevision ?? this.rawRevision,
       structuredContent: structuredContent ?? this.structuredContent,
+      structuredRevision: structuredRevision ?? this.structuredRevision,
+      structureProposal: structureProposal ?? this.structureProposal,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1377,6 +1464,12 @@ class NodeContentsCompanion extends UpdateCompanion<NodeContent> {
     if (structuredContent.present) {
       map['structured_content'] = Variable<String>(structuredContent.value);
     }
+    if (structuredRevision.present) {
+      map['structured_revision'] = Variable<int>(structuredRevision.value);
+    }
+    if (structureProposal.present) {
+      map['structure_proposal'] = Variable<String>(structureProposal.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1390,6 +1483,8 @@ class NodeContentsCompanion extends UpdateCompanion<NodeContent> {
           ..write('rawContent: $rawContent, ')
           ..write('rawRevision: $rawRevision, ')
           ..write('structuredContent: $structuredContent, ')
+          ..write('structuredRevision: $structuredRevision, ')
+          ..write('structureProposal: $structureProposal, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3017,6 +3112,8 @@ typedef $$NodeContentsTableCreateCompanionBuilder = NodeContentsCompanion
   Value<String> rawContent,
   Value<int> rawRevision,
   Value<String?> structuredContent,
+  Value<int> structuredRevision,
+  Value<String?> structureProposal,
   Value<int> rowid,
 });
 typedef $$NodeContentsTableUpdateCompanionBuilder = NodeContentsCompanion
@@ -3025,6 +3122,8 @@ typedef $$NodeContentsTableUpdateCompanionBuilder = NodeContentsCompanion
   Value<String> rawContent,
   Value<int> rawRevision,
   Value<String?> structuredContent,
+  Value<int> structuredRevision,
+  Value<String?> structureProposal,
   Value<int> rowid,
 });
 
@@ -3049,6 +3148,14 @@ class $$NodeContentsTableFilterComposer
   ColumnFilters<String> get structuredContent => $composableBuilder(
       column: $table.structuredContent,
       builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get structuredRevision => $composableBuilder(
+      column: $table.structuredRevision,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get structureProposal => $composableBuilder(
+      column: $table.structureProposal,
+      builder: (column) => ColumnFilters(column));
 }
 
 class $$NodeContentsTableOrderingComposer
@@ -3072,6 +3179,14 @@ class $$NodeContentsTableOrderingComposer
   ColumnOrderings<String> get structuredContent => $composableBuilder(
       column: $table.structuredContent,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get structuredRevision => $composableBuilder(
+      column: $table.structuredRevision,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get structureProposal => $composableBuilder(
+      column: $table.structureProposal,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$NodeContentsTableAnnotationComposer
@@ -3094,6 +3209,12 @@ class $$NodeContentsTableAnnotationComposer
 
   GeneratedColumn<String> get structuredContent => $composableBuilder(
       column: $table.structuredContent, builder: (column) => column);
+
+  GeneratedColumn<int> get structuredRevision => $composableBuilder(
+      column: $table.structuredRevision, builder: (column) => column);
+
+  GeneratedColumn<String> get structureProposal => $composableBuilder(
+      column: $table.structureProposal, builder: (column) => column);
 }
 
 class $$NodeContentsTableTableManager extends RootTableManager<
@@ -3126,6 +3247,8 @@ class $$NodeContentsTableTableManager extends RootTableManager<
             Value<String> rawContent = const Value.absent(),
             Value<int> rawRevision = const Value.absent(),
             Value<String?> structuredContent = const Value.absent(),
+            Value<int> structuredRevision = const Value.absent(),
+            Value<String?> structureProposal = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               NodeContentsCompanion(
@@ -3133,6 +3256,8 @@ class $$NodeContentsTableTableManager extends RootTableManager<
             rawContent: rawContent,
             rawRevision: rawRevision,
             structuredContent: structuredContent,
+            structuredRevision: structuredRevision,
+            structureProposal: structureProposal,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -3140,6 +3265,8 @@ class $$NodeContentsTableTableManager extends RootTableManager<
             Value<String> rawContent = const Value.absent(),
             Value<int> rawRevision = const Value.absent(),
             Value<String?> structuredContent = const Value.absent(),
+            Value<int> structuredRevision = const Value.absent(),
+            Value<String?> structureProposal = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               NodeContentsCompanion.insert(
@@ -3147,6 +3274,8 @@ class $$NodeContentsTableTableManager extends RootTableManager<
             rawContent: rawContent,
             rawRevision: rawRevision,
             structuredContent: structuredContent,
+            structuredRevision: structuredRevision,
+            structureProposal: structureProposal,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

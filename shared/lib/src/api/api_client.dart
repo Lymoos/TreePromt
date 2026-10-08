@@ -220,5 +220,15 @@ class ApiClient {
     return _json(r);
   }
 
+  // ── AI Structuring Engine (этап 6) ──
+
+  /// Ставит задачу в очередь структурирования. Результат придёт через синхронизацию.
+  /// [sourceRevision] — подтверждённая сервером ревизия исходника (409 stale_source, если устарела).
+  Future<String> requestStructure(String nodeId, int sourceRevision) async {
+    final r = await _authed('POST', _u('/ai/structure'), body: {'node_id': nodeId, 'source_revision': sourceRevision});
+    if (r.statusCode != 202) _fail(r);
+    return _json(r)['request_id'] as String;
+  }
+
   void close() => _http.close();
 }

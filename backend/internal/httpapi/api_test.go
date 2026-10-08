@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"prompttree/backend/internal/ai"
 	"prompttree/backend/internal/core"
 	"prompttree/backend/internal/realtime"
 	"prompttree/backend/internal/testdb"
@@ -30,7 +31,8 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	hub := realtime.NewHub()
-	srv := httptest.NewServer(New(auth, tokens, tree.NewService(pool, hub, log), hub, log, Options{}).Handler())
+	treeSvc := tree.NewService(pool, hub, log)
+	srv := httptest.NewServer(New(auth, tokens, treeSvc, ai.NewService(treeSvc, nil, 0, log), hub, log, Options{}).Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -214,5 +216,18 @@ func TestWebClientGetsRefreshTokenOnlyInHttpOnlyCookie(t *testing.T) {
 	}
 	if resp, _ = post("/api/v1/auth/refresh", map[string]string{"refresh_token": cookieMarker}, next); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("refresh after logout: %d", resp.StatusCode)
+	}
+}
+
+func TestStructureWithoutKeyIsDisabledNotBroken(t *testing.T) {
+	srv := newTestServer(t)
+	call(t, srv, "POST", "/api/v1/auth/register", "", map[string]string{"email": "ai@example.com", "password": "длинный-пароль-1"}, nil)
+	var tok core.Tokens
+	call(t, srv, "POST", "/api/v1/auth/login", "", map[string]any{"email": "ai@example.com", "password": "длинный-пароль-1",
+		"device": map[string]any{"id": uuid.New()}}, &tok)
+	var body map[string]apiError
+	code := call(t, srv, "POST", "/api/v1/ai/structure", tok.AccessToken, map[string]any{"node_id": uuid.New(), "source_revision": 1}, &body)
+	if code != http.StatusServiceUnavailable || body["error"].Code != "ai_disabled" {
+		t.Fatalf("got %d %+v", code, body)
 	}
 }

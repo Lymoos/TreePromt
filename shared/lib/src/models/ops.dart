@@ -13,6 +13,9 @@ abstract final class OpType {
   static const setRawContent = 'set_raw_content';
   static const restoreVersion = 'restore_version';
   static const resolveConflict = 'resolve_conflict';
+  static const setStructuredText = 'set_structured_text';
+  static const applyProposal = 'apply_proposal';
+  static const dismissProposal = 'dismiss_proposal';
 
   static bool isProjectOp(String t) =>
       t == createProject || t == updateProject || t == deleteProject || t == restoreProject;

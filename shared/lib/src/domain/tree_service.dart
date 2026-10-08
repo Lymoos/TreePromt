@@ -107,6 +107,34 @@ class TreeService {
         );
       });
 
+  /// Правка итогового (структурированного) текста. Как и с исходником, пока операция
+  /// не ушла на сервер, новые правки заменяют её payload.
+  Future<void> setStructuredText(String nodeId, String text) => store.transaction(() async {
+        final content = await store.content(nodeId);
+        if (content?.structuredContent == null) return;
+        await applyLocal(store, OpType.setStructuredText, nodeId, {'text': text}, _now());
+        final payload = jsonEncode({'text': text});
+        final last = await store.lastOpFor(nodeId);
+        if (last != null && last.type == OpType.setStructuredText && !last.inFlight) {
+          await store.replaceOpPayload(last.seq, payload);
+          return;
+        }
+        await store.enqueue(
+          operationId: newId(),
+          type: OpType.setStructuredText,
+          entityId: nodeId,
+          baseRevision: content!.structuredRevision,
+          payload: payload,
+        );
+      });
+
+  /// Применить результат ИИ, который сервер отложил (исходник менялся или есть замечания).
+  Future<void> applyProposal(String nodeId, String requestId) =>
+      _do(OpType.applyProposal, nodeId, {'request_id': requestId});
+
+  Future<void> dismissProposal(String nodeId, String requestId) =>
+      _do(OpType.dismissProposal, nodeId, {'request_id': requestId});
+
   Future<void> restoreVersion(String nodeId, String versionId) =>
       _do(OpType.restoreVersion, nodeId, {'version_id': versionId});
 

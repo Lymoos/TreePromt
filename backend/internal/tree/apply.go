@@ -236,6 +236,12 @@ func dispatch(oc *opCtx) (outcome, error) {
 		return oc.restoreVersion()
 	case OpResolveConflict:
 		return oc.resolveConflict()
+	case OpSetStructuredText:
+		return oc.setStructuredText()
+	case OpApplyProposal:
+		return oc.applyProposal()
+	case OpDismissProposal:
+		return oc.dismissProposal()
 	}
 	return outcome{}, reject(CodeUnknownOp, "unknown operation type %q", oc.op.Type)
 }
@@ -256,13 +262,13 @@ func loadProject(ctx context.Context, q pgx.Tx, userID, id uuid.UUID) (ProjectSt
 
 const nodeCols = `n.id, n.project_id, n.parent_id, n.kind, n.name, n.sort_key, n.revision, n.has_conflict,
 	n.created_at, n.updated_at, n.deleted_at, c.raw_content, c.raw_revision, c.structured_content,
-	c.structured_revision, c.structured_from_revision, c.structure_status`
+	c.structured_revision, c.structured_from_revision, c.structure_status, c.structure_proposal`
 
 func scanNode(row pgx.Row) (NodeState, error) {
 	var n NodeState
 	err := row.Scan(&n.ID, &n.ProjectID, &n.ParentID, &n.Kind, &n.Name, &n.SortKey, &n.Revision, &n.HasConflict,
 		&n.CreatedAt, &n.UpdatedAt, &n.DeletedAt, &n.RawContent, &n.RawRevision, &n.StructuredContent,
-		&n.StructuredRevision, &n.StructuredFromRevision, &n.StructureStatus)
+		&n.StructuredRevision, &n.StructuredFromRevision, &n.StructureStatus, &n.StructureProposal)
 	return n, err
 }
 

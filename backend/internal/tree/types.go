@@ -23,6 +23,10 @@ const (
 	OpSetRawContent   = "set_raw_content"
 	OpRestoreVersion  = "restore_version"
 	OpResolveConflict = "resolve_conflict"
+	// Этап 6: структурированный текст.
+	OpSetStructuredText = "set_structured_text"
+	OpApplyProposal     = "apply_proposal"
+	OpDismissProposal   = "dismiss_proposal"
 )
 
 const (
@@ -97,6 +101,7 @@ type NodeState struct {
 	StructuredRevision     int64           `json:"structured_revision"`
 	StructuredFromRevision *int64          `json:"structured_from_revision"`
 	StructureStatus        string          `json:"structure_status"`
+	StructureProposal      json.RawMessage `json:"structure_proposal"`
 }
 
 type VersionState struct {

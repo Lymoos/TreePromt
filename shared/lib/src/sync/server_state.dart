@@ -55,11 +55,14 @@ class ServerStateApplier {
       syncError: const Value(null),
     ));
     final structured = j['structured_content'];
+    final proposal = j['structure_proposal'];
     await store.putContent(NodeContentsCompanion.insert(
       nodeId: id,
       rawContent: Value(j['raw_content'] as String? ?? ''),
       rawRevision: Value(j['raw_revision'] as int? ?? 0),
       structuredContent: Value(structured == null ? null : jsonEncode(structured)),
+      structuredRevision: Value(j['structured_revision'] as int? ?? 0),
+      structureProposal: Value(proposal == null ? null : jsonEncode(proposal)),
     ));
     await _replay(id);
   }
