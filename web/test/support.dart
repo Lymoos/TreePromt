@@ -32,7 +32,7 @@ Widget app(LocalStore store, {Session session = const Session(mode: SessionMode.
         tokenStoreProvider.overrideWithValue(MemoryTokenStore()),
         sessionProvider.overrideWith((ref) => session),
       ],
-      child: const PromptTreeApp(layout: ShellLayout.desktop),
+      child: const PromptTreeApp(layout: ShellLayout.adaptive),
     );
 
 /// Настоящие шрифты для скриншотов: Onest, JetBrains Mono и иконки Material из SDK.

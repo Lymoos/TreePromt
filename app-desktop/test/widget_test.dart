@@ -86,4 +86,28 @@ void main() {
     expect(find.byKey(const Key('editor-text')), findsOneWidget);
     await tearDownApp(tester, store);
   });
+
+  testWidgets('Ctrl+N still works right after a dialog closed (focus was lost before)', (tester) async {
+    await desktopSize(tester);
+    final store = memoryStore();
+    await tester.pumpWidget(app(store));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('create-first')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('name-field')), 'Новый проект');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('Новая задача'), findsOneWidget, reason: 'name dialog for a new AI task');
+    await tester.enterText(find.byKey(const Key('name-field')), 'Сразу после диалога');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect((await store.db.select(store.db.nodes).get()).single.name, 'Сразу после диалога');
+    await tearDownApp(tester, store);
+  });
 }

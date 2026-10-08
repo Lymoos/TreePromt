@@ -4,8 +4,8 @@ import 'package:prompttree_shared/app.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 
 /// Главный экран телефона: дерево на весь экран, файл открывается отдельным экраном.
-class TreeScreen extends ConsumerWidget {
-  const TreeScreen({super.key});
+class MobileShell extends ConsumerWidget {
+  const MobileShell({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -22,7 +22,11 @@ class TreeScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
-        title: const Row(children: [AppIcon(size: 22), SizedBox(width: 10), Text('PromptTree')]),
+        title: const Row(children: [
+          AppIcon(size: 22),
+          SizedBox(width: 10),
+          Flexible(child: Text('PromptTree', overflow: TextOverflow.ellipsis, maxLines: 1)),
+        ]),
         actions: [
           const SyncBadge(),
           PopupMenuButton<String>(

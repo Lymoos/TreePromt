@@ -5,8 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:prompttree_shared/app.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 
-import 'src/app.dart';
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = openLocalStore();
@@ -19,6 +17,6 @@ Future<void> main() async {
       deviceInfoProvider.overrideWithValue((name: Platform.localHostname, platform: Platform.operatingSystem)),
       sessionProvider.overrideWith((ref) => session),
     ],
-    child: const PromptTreeApp(),
+    child: const PromptTreeApp(layout: ShellLayout.mobile),
   ));
 }

@@ -160,3 +160,59 @@ func TestLoginRateLimit(t *testing.T) {
 		t.Fatal("login attempts are not rate limited")
 	}
 }
+
+func TestWebClientGetsRefreshTokenOnlyInHttpOnlyCookie(t *testing.T) {
+	srv := newTestServer(t)
+	if code := call(t, srv, "POST", "/api/v1/auth/register", "", map[string]string{
+		"email": "web@example.com", "password": "длинный-пароль-1"}, nil); code != http.StatusCreated {
+		t.Fatalf("register: %d", code)
+	}
+	post := func(path string, body any, cookie *http.Cookie) (*http.Response, core.Tokens) {
+		b, _ := json.Marshal(body)
+		req, _ := http.NewRequest("POST", srv.URL+path, bytes.NewReader(b))
+		req.Header.Set("X-PT-Client", "web")
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var tok core.Tokens
+		_ = json.NewDecoder(resp.Body).Decode(&tok)
+		return resp, tok
+	}
+	cookieOf := func(resp *http.Response) *http.Cookie {
+		for _, c := range resp.Cookies() {
+			if c.Name == refreshCookie {
+				return c
+			}
+		}
+		return nil
+	}
+
+	resp, tok := post("/api/v1/auth/login", map[string]any{"email": "web@example.com", "password": "длинный-пароль-1",
+		"device": map[string]any{"id": uuid.New(), "name": "browser", "platform": "web"}}, nil)
+	c := cookieOf(resp)
+	if resp.StatusCode != http.StatusOK || c == nil || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("login: %d cookie=%+v", resp.StatusCode, c)
+	}
+	if tok.RefreshToken != cookieMarker || tok.AccessToken == "" {
+		t.Fatalf("refresh token must not be in the body: %+v", tok)
+	}
+
+	resp, tok = post("/api/v1/auth/refresh", map[string]string{"refresh_token": cookieMarker}, c)
+	next := cookieOf(resp)
+	if resp.StatusCode != http.StatusOK || next == nil || next.Value == c.Value || tok.RefreshToken != cookieMarker {
+		t.Fatalf("refresh via cookie: %d %+v", resp.StatusCode, next)
+	}
+
+	resp, _ = post("/api/v1/auth/logout", map[string]string{"refresh_token": cookieMarker}, next)
+	if cleared := cookieOf(resp); resp.StatusCode != http.StatusNoContent || cleared == nil || cleared.MaxAge >= 0 {
+		t.Fatalf("logout must clear the cookie: %d %+v", resp.StatusCode, cleared)
+	}
+	if resp, _ = post("/api/v1/auth/refresh", map[string]string{"refresh_token": cookieMarker}, next); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("refresh after logout: %d", resp.StatusCode)
+	}
+}

@@ -24,7 +24,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    final url = ref.read(sessionProvider).serverUrl;
+    final url = ref.read(sessionProvider).serverUrl ?? ref.read(defaultServerUrlProvider);
     if (url != null) _server.text = url.toString();
   }
 
@@ -70,7 +70,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _error = null;
     });
     final store = ref.read(storeProvider);
-    final client = ApiClient(baseUrl: url, tokens: ref.read(tokenStoreProvider));
+    final client = ApiClient(baseUrl: url, tokens: ref.read(tokenStoreProvider), headers: ref.read(apiHeadersProvider));
     try {
       if (register) await client.register(_email.text.trim(), _password.text);
       var deviceId = await store.getValue(deviceIdKey) ?? newId();

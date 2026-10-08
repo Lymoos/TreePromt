@@ -59,7 +59,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.internalError(w, r, err)
 	default:
-		writeJSON(w, http.StatusOK, t)
+		writeJSON(w, http.StatusOK, s.deliverRefresh(w, r, t))
 	}
 }
 
@@ -70,16 +70,17 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	t, err := s.auth.Refresh(r.Context(), req.RefreshToken)
+	t, err := s.auth.Refresh(r.Context(), s.refreshFromRequest(r, req.RefreshToken))
 	switch {
 	case errors.Is(err, core.ErrStaleRefresh):
 		writeError(w, http.StatusConflict, "stale_refresh", err.Error())
 	case errors.Is(err, core.ErrInvalidRefreshToken):
+		s.clearRefreshCookie(w, r)
 		writeError(w, http.StatusUnauthorized, "invalid_refresh_token", err.Error())
 	case err != nil:
 		s.internalError(w, r, err)
 	default:
-		writeJSON(w, http.StatusOK, t)
+		writeJSON(w, http.StatusOK, s.deliverRefresh(w, r, t))
 	}
 }
 
@@ -90,10 +91,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if err := s.auth.Logout(r.Context(), req.RefreshToken); err != nil {
+	if err := s.auth.Logout(r.Context(), s.refreshFromRequest(r, req.RefreshToken)); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
+	s.clearRefreshCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 

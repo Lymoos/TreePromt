@@ -1,0 +1,15 @@
+# Локальная проверка полной связки (Caddy + backend + PostgreSQL + веб) без домена и HTTPS:
+#   docker compose -p prompttree-local -f docker-compose.yml -f docker-compose.local.yml up -d --build
+# Открыть http://localhost:8088
+services:
+  backend:
+    environment:
+      ALLOWED_ORIGINS: http://localhost:8088
+      ALLOW_REGISTRATION: "true"
+  caddy:
+    ports: !override
+      - "127.0.0.1:8088:8088"
+    environment:
+      DOMAIN: http://localhost:8088
+  backup:
+    profiles: [backup] # локально бэкапы не нужны

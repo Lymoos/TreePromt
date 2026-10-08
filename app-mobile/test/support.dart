@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:prompttree_mobile/src/app.dart';
 import 'package:prompttree_shared/app.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 import 'package:sqlite3/open.dart';
@@ -32,7 +31,7 @@ Widget app(LocalStore store, {Session session = const Session(mode: SessionMode.
         tokenStoreProvider.overrideWithValue(MemoryTokenStore()),
         sessionProvider.overrideWith((ref) => session),
       ],
-      child: const PromptTreeApp(),
+      child: const PromptTreeApp(layout: ShellLayout.mobile),
     );
 
 /// Настоящие шрифты для скриншотов: Onest, JetBrains Mono и иконки Material из SDK.

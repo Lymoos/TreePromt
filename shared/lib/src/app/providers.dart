@@ -9,6 +9,12 @@ final tokenStoreProvider = Provider<TokenStore>((ref) => throw UnimplementedErro
 typedef DeviceInfo = ({String name, String platform});
 final deviceInfoProvider = Provider<DeviceInfo>((ref) => (name: 'unknown', platform: 'unknown'));
 
+/// Заголовки для всех запросов к серверу. Веб: {'X-PT-Client': 'web'} — refresh-токен в cookie.
+final apiHeadersProvider = Provider<Map<String, String>>((ref) => const {});
+
+/// Адрес сервера по умолчанию для экрана входа. Веб: тот же адрес, откуда открыта страница.
+final defaultServerUrlProvider = Provider<Uri?>((ref) => null);
+
 enum SessionMode { none, local, server }
 
 class Session {
@@ -26,7 +32,11 @@ final sessionProvider = StateProvider<Session>((ref) => const Session(mode: Sess
 final apiProvider = Provider<ApiClient?>((ref) {
   final s = ref.watch(sessionProvider);
   if (s.serverUrl == null) return null;
-  final c = ApiClient(baseUrl: s.serverUrl!, tokens: ref.watch(tokenStoreProvider));
+  final c = ApiClient(
+    baseUrl: s.serverUrl!,
+    tokens: ref.watch(tokenStoreProvider),
+    headers: ref.watch(apiHeadersProvider),
+  );
   ref.onDispose(c.close);
   return c;
 });

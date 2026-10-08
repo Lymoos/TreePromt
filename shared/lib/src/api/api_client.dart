@@ -64,11 +64,19 @@ class NetworkException implements Exception {
 class AuthRequiredException implements Exception {}
 
 class ApiClient {
-  ApiClient({required this.baseUrl, required this.tokens, http.Client? client, this.timeout = const Duration(seconds: 30)})
-      : _http = client ?? http.Client();
+  ApiClient({
+    required this.baseUrl,
+    required this.tokens,
+    http.Client? client,
+    this.timeout = const Duration(seconds: 30),
+    this.headers = const {},
+  }) : _http = client ?? http.Client();
 
   final Uri baseUrl;
   final TokenStore tokens;
+
+  /// Дополнительные заголовки каждого запроса (веб: X-PT-Client: web).
+  final Map<String, String> headers;
   final http.Client _http;
   final Duration timeout;
   Future<AuthTokens>? _refreshing;
@@ -83,6 +91,7 @@ class ApiClient {
 
   Future<http.Response> _send(String method, Uri url, {Object? body, String? token}) async {
     final req = http.Request(method, url);
+    req.headers.addAll(headers);
     req.headers['Content-Type'] = 'application/json';
     if (token != null) req.headers['Authorization'] = 'Bearer $token';
     if (body != null) req.body = jsonEncode(body);

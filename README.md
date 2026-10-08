@@ -10,3 +10,4 @@
 | `shared/` | общий код Flutter: локальная БД, синхронизация, API, общие экраны и виджеты |
 | `app-mobile/` | приложение для Android и iOS ([README](app-mobile/README.md)) |
 | `app-desktop/` | приложение для Windows, macOS, Linux ([README](app-desktop/README.md)) |
+| `web/` | веб-версия на Flutter Web ([README](web/README.md)) |

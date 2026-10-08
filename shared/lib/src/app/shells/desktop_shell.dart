@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,65 +7,78 @@ import 'package:prompttree_shared/prompttree_shared.dart';
 
 const sidebarWidth = 272.0;
 
-class NewAiTaskIntent extends Intent {
-  const NewAiTaskIntent();
-}
+/// Сочетание для «создать»: в браузере Ctrl+N занят самим браузером
+/// (новое окно), поэтому там Alt+N; в приложении для ПК — Ctrl+N (Cmd+N на macOS).
+String get newShortcutLabel => kIsWeb ? 'Alt N' : 'Ctrl N';
 
-class NewRawNoteIntent extends Intent {
-  const NewRawNoteIntent();
+bool _isNewShortcut(KeyEvent e) {
+  if (e is! KeyDownEvent || e.logicalKey != LogicalKeyboardKey.keyN) return false;
+  final kb = HardwareKeyboard.instance;
+  return kIsWeb ? kb.isAltPressed : (kb.isControlPressed || kb.isMetaPressed);
 }
 
 /// Окно ПК по концепту v1: слева панель-дерево (вариант C), справа редактор.
-class HomeScreen extends ConsumerWidget {
-  const HomeScreen({super.key});
+class DesktopShell extends ConsumerStatefulWidget {
+  const DesktopShell({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DesktopShell> createState() => _DesktopShellState();
+}
+
+class _DesktopShellState extends ConsumerState<DesktopShell> {
+  late final TreeActions _actions =
+      TreeActions(ref, openNode: (id) => ref.read(selectedProvider.notifier).state = id);
+
+  @override
+  void initState() {
+    super.initState();
+    // Глобальный обработчик: работает, где бы ни был фокус (в том числе после закрытия диалогов).
+    HardwareKeyboard.instance.addHandler(_onKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKey);
+    super.dispose();
+  }
+
+  bool _onKey(KeyEvent e) {
+    if (!_isNewShortcut(e)) return false;
+    // Поверх окна открыт диалог или другой экран — не мешаем ему.
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
+    _quickCreate(HardwareKeyboard.instance.isShiftPressed ? NodeKind.rawNote : NodeKind.aiTask);
+    return true;
+  }
+
+  Future<void> _quickCreate(String kind) async {
+    final target = await _actions.target();
+    if (!mounted) return;
+    final items = _actions.createMenu(target);
+    final item = items.where((a) => a.label == (kind == NodeKind.aiTask ? 'AI Task' : 'Raw Note')).firstOrNull;
+    await (item ?? items.last).run(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final c = context.pt;
-    final actions = TreeActions(ref, openNode: (id) => ref.read(selectedProvider.notifier).state = id);
     final selected = ref.watch(selectedProvider);
     final nodes = ref.watch(nodesProvider).valueOrNull ?? const <TreeNode>[];
     final open = nodes.where((n) => n.id == selected && n.kind != NodeKind.folder && n.deletedAt == null).firstOrNull;
 
-    Future<void> quickCreate(String kind) async {
-      final target = await actions.target();
-      if (!context.mounted) return;
-      final items = actions.createMenu(target);
-      final item = items.where((a) => a.label == (kind == NodeKind.aiTask ? 'AI Task' : 'Raw Note')).firstOrNull;
-      await (item ?? items.last).run(context);
-    }
-
-    return Shortcuts(
-      shortcuts: const {
-        SingleActivator(LogicalKeyboardKey.keyN, control: true): NewAiTaskIntent(),
-        SingleActivator(LogicalKeyboardKey.keyN, control: true, shift: true): NewRawNoteIntent(),
-        SingleActivator(LogicalKeyboardKey.keyN, meta: true): NewAiTaskIntent(),
-        SingleActivator(LogicalKeyboardKey.keyN, meta: true, shift: true): NewRawNoteIntent(),
-      },
-      child: Actions(
-        actions: {
-          NewAiTaskIntent: CallbackAction<NewAiTaskIntent>(onInvoke: (_) => quickCreate(NodeKind.aiTask)),
-          NewRawNoteIntent: CallbackAction<NewRawNoteIntent>(onInvoke: (_) => quickCreate(NodeKind.rawNote)),
-        },
-        child: Focus(
-          autofocus: true,
-          child: Scaffold(
-            body: Row(children: [
-              SizedBox(width: sidebarWidth, child: _Sidebar(actions: actions)),
-              VerticalDivider(width: 1, thickness: 1, color: c.line),
-              Expanded(
-                child: open == null
-                    ? const _Placeholder()
-                    : EditorPane(
-                        key: ValueKey(open.id), // другой файл — новый редактор, старый сохраняет текст в dispose
-                        nodeId: open.id,
-                        onClose: () => ref.read(selectedProvider.notifier).state = null,
-                      ),
-              ),
-            ]),
-          ),
+    return Scaffold(
+      body: Row(children: [
+        SizedBox(width: sidebarWidth, child: _Sidebar(actions: _actions)),
+        VerticalDivider(width: 1, thickness: 1, color: c.line),
+        Expanded(
+          child: open == null
+              ? const _Placeholder()
+              : EditorPane(
+                  key: ValueKey(open.id), // другой файл — новый редактор, старый сохраняет текст в dispose
+                  nodeId: open.id,
+                  onClose: () => ref.read(selectedProvider.notifier).state = null,
+                ),
         ),
-      ),
+      ]),
     );
   }
 }
@@ -132,7 +146,7 @@ class _Sidebar extends ConsumerWidget {
             key: const Key('create'),
             icon: Icons.add,
             label: 'Создать',
-            hint: 'Ctrl N',
+            hint: newShortcutLabel,
             onTap: () async {
               final box = btn.findRenderObject() as RenderBox;
               final at = box.localToGlobal(Offset(8, box.size.height));
@@ -236,7 +250,9 @@ class _Placeholder extends StatelessWidget {
           const SizedBox(height: 16),
           Text('Откройте заметку слева', style: ui(17, weight: FontWeight.w600, color: c.fg)),
           const SizedBox(height: 6),
-          Text('Ctrl N — новая AI Task, Ctrl Shift N — черновик. Правый клик по дереву — действия.',
+          Text(
+              '$newShortcutLabel — новая AI Task, ${newShortcutLabel.replaceFirst(' ', ' Shift ')} — черновик. '
+              'Правый клик по дереву — действия.',
               style: ui(14, color: c.muted, height: 1.5)),
         ]),
       ),

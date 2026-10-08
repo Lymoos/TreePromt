@@ -2,6 +2,7 @@
 /// одинаковые для телефона, ПК и веба. Оболочки — в app-mobile, app-desktop, web.
 library;
 
+export 'src/app/prompttree_app.dart';
 export 'src/app/providers.dart';
 export 'src/app/screens/conflict_screen.dart';
 export 'src/app/screens/editor_screen.dart';
@@ -10,6 +11,8 @@ export 'src/app/screens/trash_screen.dart';
 export 'src/app/screens/versions_screen.dart';
 export 'src/app/secure_token_store.dart';
 export 'src/app/session.dart';
+export 'src/app/shells/desktop_shell.dart';
+export 'src/app/shells/mobile_shell.dart';
 export 'src/app/tree_actions.dart';
 export 'src/app/widgets/common.dart';
 export 'src/app/widgets/dialogs.dart';

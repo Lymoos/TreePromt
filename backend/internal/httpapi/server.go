@@ -124,7 +124,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", origin)
 			h.Set("Access-Control-Allow-Credentials", "true")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-PT-Client")
 			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			h.Add("Vary", "Origin")
 			if r.Method == http.MethodOptions {
