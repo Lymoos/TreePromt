@@ -34,6 +34,7 @@ import (
 	"prompttree/aicrew/internal/config"
 	"prompttree/aicrew/internal/gitx"
 	"prompttree/aicrew/internal/host"
+	"prompttree/aicrew/internal/review"
 	"prompttree/aicrew/internal/runner"
 	"prompttree/aicrew/internal/secrets"
 	"prompttree/aicrew/internal/verify"
@@ -58,6 +59,7 @@ func usage() {
   check-claude-token проверить сохранённый токен (сам токен не выводится)
   add-repo           привязать локальный репозиторий: -project <id> -path <папка> [-name] [-branch] [-profile файл.json]
   run                брать и выполнять задачи, сливать проверенные в integration-ветку
+  set-profile        профиль проверки репозитория: -path <папка> -profile файл.json ({"template":"flutter"})
   promote            перенести integration в основную ветку после проверки: -path <папка>`)
 }
 
@@ -262,6 +264,33 @@ func dispatch(cmd string, args []string) error {
 	case "run":
 		return runHost(ctx, e)
 
+	case "set-profile":
+		fs := flag.NewFlagSet("set-profile", flag.ExitOnError)
+		path := fs.String("path", "", "папка репозитория")
+		file := fs.String("profile", "", "JSON-файл профиля, например {\"template\":\"flutter\"}")
+		_ = fs.Parse(args)
+		if e.client == nil {
+			return api.ErrAuthRequired
+		}
+		b, err := os.ReadFile(*file)
+		if err != nil {
+			return err
+		}
+		p, err := verify.ParseProfile(b)
+		if err != nil {
+			return err
+		}
+		repo, err := findRepo(ctx, e, *path)
+		if err != nil {
+			return err
+		}
+		if err := e.client.UpdateProfile(ctx, repo.ID, b); err != nil {
+			return err
+		}
+		fmt.Printf("Профиль %s обновлён: %d шагов (попытка — %d, слияние — %d).\n", repo.Name, len(p.Steps),
+			len(p.ForStage(verify.StageAttempt).Steps), len(p.ForStage(verify.StageMerge).Steps))
+		return nil
+
 	case "promote":
 		fs := flag.NewFlagSet("promote", flag.ExitOnError)
 		path := fs.String("path", "", "папка репозитория")
@@ -289,15 +318,22 @@ func runHost(ctx context.Context, e *env) error {
 	workerID := h.Workers["claude_code/"+e.cfg.ClaudeModel]
 	run := runner.New("git", "docker")
 	g := gitx.Git{R: run}
+	claude := &agent.ClaudeCode{R: run, Image: e.cfg.AgentImage, Model: e.cfg.ClaudeModel,
+		Token: func() (string, error) {
+			t, err := e.sec.Get(secrets.ClaudeToken)
+			return cleanToken(t), err
+		}}
 	hst := &host.Host{
 		API: e.client, Git: g, WorkerID: workerID, Log: log,
 		PollEvery: 10 * time.Second, HeartbeatEvery: 30 * time.Second,
-		Agent: &agent.ClaudeCode{R: run, Image: e.cfg.AgentImage, Model: e.cfg.ClaudeModel,
-			Token: func() (string, error) {
-				t, err := e.sec.Get(secrets.ClaudeToken)
-				return cleanToken(t), err
-			}},
+		Agent:    claude,
 		Verifier: verify.Verifier{R: run, DefaultImage: e.cfg.AgentImage},
+		Reviewer: reviewers{
+			// Logic QA: Gemini на сервере; пока ключа нет — Claude Haiku на ПК (решение 7.4/1).
+			logic: review.Chain{Primary: review.Server{API: e.client, WorkerID: workerID},
+				Fallback: review.Claude{Agent: claude, Model: e.cfg.ReviewModel}},
+			techLead: review.Claude{Agent: claude, Model: e.cfg.TechLeadModel},
+		},
 	}
 
 	// При старте — уборка осиротевших worktree (ТЗ п. 8.2).
@@ -325,24 +361,11 @@ func promote(ctx context.Context, e *env, path string) error {
 	if e.client == nil {
 		return api.ErrAuthRequired
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil || path == "" {
-		return errors.New("нужен -path <папка репозитория>")
-	}
-	repos, err := e.client.ListRepositories(ctx)
+	repo, err := findRepo(ctx, e, path)
 	if err != nil {
 		return err
 	}
-	var repo *api.Repository
-	for i := range repos {
-		if strings.EqualFold(filepath.Clean(repos[i].LocalPath), filepath.Clean(abs)) {
-			repo = &repos[i].Repository
-			break
-		}
-	}
-	if repo == nil {
-		return fmt.Errorf("%s не привязан к AiCrew (add-repo)", abs)
-	}
+	abs := repo.LocalPath
 	run := runner.New("git", "docker")
 	g := gitx.Git{R: run}
 	integ := repo.Integration()
@@ -365,7 +388,8 @@ func promote(ctx context.Context, e *env, path string) error {
 		return err
 	}
 	defer g.RemoveTempWorktree(context.WithoutCancel(ctx), abs, "promote-check")
-	rep, err := verify.Verifier{R: run, DefaultImage: e.cfg.AgentImage}.Run(ctx, profile, tmp, "aicrew-verify-promote", 20*time.Minute)
+	rep, err := verify.Verifier{R: run, DefaultImage: e.cfg.AgentImage}.Run(ctx, profile.ForStage(verify.StageMerge), tmp,
+		"aicrew-verify-promote", 20*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -438,4 +462,34 @@ func cleanToken(s string) string {
 		return m
 	}
 	return t
+}
+
+// findRepo — привязанный к AiCrew репозиторий по папке.
+func findRepo(ctx context.Context, e *env, path string) (*api.Repository, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil || path == "" {
+		return nil, errors.New("нужен -path <папка репозитория>")
+	}
+	repos, err := e.client.ListRepositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range repos {
+		if strings.EqualFold(filepath.Clean(repos[i].LocalPath), filepath.Clean(abs)) {
+			return &repos[i].Repository, nil
+		}
+	}
+	return nil, fmt.Errorf("%s не привязан к AiCrew (add-repo)", abs)
+}
+
+// reviewers — Logic QA для всех задач, Tech Lead — для задач с пометкой (решение 7.4/4).
+type reviewers struct {
+	logic, techLead review.Reviewer
+}
+
+func (r reviewers) Review(ctx context.Context, role string, t *api.Task, workdir string, f review.Facts) (api.Verdict, error) {
+	if role == review.RoleTechLead {
+		return r.techLead.Review(ctx, role, t, workdir, f)
+	}
+	return r.logic.Review(ctx, role, t, workdir, f)
 }

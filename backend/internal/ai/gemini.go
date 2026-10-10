@@ -67,16 +67,29 @@ type geminiResponse struct {
 	} `json:"promptFeedback"`
 }
 
-// Generate вызывает generateContent с JSON-схемой ответа. Ключ — только в заголовке,
-// в URL и тексты ошибок он не попадает.
+// Generate вызывает generateContent с JSON-схемой ответа структурирования.
 func (g *Gemini) Generate(ctx context.Context, system, user string) (tree.Generated, error) {
+	text, err := g.GenerateJSON(ctx, system, user, responseSchema)
+	if err != nil {
+		return tree.Generated{}, err
+	}
+	var out tree.Generated
+	if err := json.Unmarshal(text, &out); err != nil {
+		return tree.Generated{}, fmt.Errorf("Gemini answer is not valid JSON: %w", err)
+	}
+	return out, nil
+}
+
+// GenerateJSON вызывает generateContent со схемой ответа и возвращает текст ответа (JSON).
+// Ключ — только в заголовке, в URL и тексты ошибок он не попадает. Им же пользуется Logic QA (7.4).
+func (g *Gemini) GenerateJSON(ctx context.Context, system, user string, schema map[string]any) ([]byte, error) {
 	body, _ := json.Marshal(map[string]any{
 		"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": system}}},
 		"contents":          []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": user}}}},
 		"generationConfig": map[string]any{
 			"temperature":      0.2,
 			"responseMimeType": "application/json",
-			"responseSchema":   responseSchema,
+			"responseSchema":   schema,
 		},
 	})
 	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", g.baseURL, g.model)
@@ -86,13 +99,13 @@ func (g *Gemini) Generate(ctx context.Context, system, user string) (tree.Genera
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return tree.Generated{}, ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(g.backoff * time.Duration(1<<(attempt-1))):
 			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
-			return tree.Generated{}, err
+			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-goog-api-key", g.apiKey)
@@ -105,28 +118,28 @@ func (g *Gemini) Generate(ctx context.Context, system, user string) (tree.Genera
 		resp.Body.Close()
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return tree.Generated{}, ErrModelAuth
+			return nil, ErrModelAuth
 		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 			lastErr = fmt.Errorf("Gemini is busy (HTTP %d)", resp.StatusCode)
 			continue
 		case resp.StatusCode != http.StatusOK:
-			return tree.Generated{}, fmt.Errorf("Gemini returned HTTP %d", resp.StatusCode)
+			return nil, fmt.Errorf("Gemini returned HTTP %d", resp.StatusCode)
 		}
 		return parseGemini(data)
 	}
-	return tree.Generated{}, lastErr
+	return nil, lastErr
 }
 
-func parseGemini(data []byte) (tree.Generated, error) {
+func parseGemini(data []byte) ([]byte, error) {
 	var r geminiResponse
 	if err := json.Unmarshal(data, &r); err != nil {
-		return tree.Generated{}, fmt.Errorf("unreadable Gemini response: %w", err)
+		return nil, fmt.Errorf("unreadable Gemini response: %w", err)
 	}
 	if r.PromptFeedback.BlockReason != "" {
-		return tree.Generated{}, fmt.Errorf("Gemini blocked the request: %s", r.PromptFeedback.BlockReason)
+		return nil, fmt.Errorf("Gemini blocked the request: %s", r.PromptFeedback.BlockReason)
 	}
 	if len(r.Candidates) == 0 {
-		return tree.Generated{}, errors.New("Gemini returned no answer")
+		return nil, errors.New("Gemini returned no answer")
 	}
 	c := r.Candidates[0]
 	var text strings.Builder
@@ -134,11 +147,7 @@ func parseGemini(data []byte) (tree.Generated, error) {
 		text.WriteString(p.Text)
 	}
 	if c.FinishReason != "" && c.FinishReason != "STOP" {
-		return tree.Generated{}, fmt.Errorf("Gemini stopped early: %s", c.FinishReason)
+		return nil, fmt.Errorf("Gemini stopped early: %s", c.FinishReason)
 	}
-	var g tree.Generated
-	if err := json.Unmarshal([]byte(text.String()), &g); err != nil {
-		return tree.Generated{}, fmt.Errorf("Gemini answer is not valid JSON: %w", err)
-	}
-	return g, nil
+	return []byte(text.String()), nil
 }

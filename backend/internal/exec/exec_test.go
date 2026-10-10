@@ -169,7 +169,7 @@ func TestHappyPathToMergeable(t *testing.T) {
 	f.move(c, StatusInProgress, Facts{BaseCommit: "aaa"})
 	f.move(c, StatusVerifying, Facts{ResultCommit: "bbb", Details: json.RawMessage(`{"changed_files":["lib/main.dart"]}`)})
 	f.move(c, StatusLLMReview, Facts{})
-	f.move(c, StatusMergeable, Facts{Reason: "review skipped until 7.4"})
+	f.move(c, StatusMergeable, Facts{Review: approve()})
 	st, _, _ := f.status(id)
 	if st != StatusMergeable {
 		t.Fatal(st)

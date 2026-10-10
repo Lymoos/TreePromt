@@ -9,13 +9,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"prompttree/aicrew/internal/agent"
 	"prompttree/aicrew/internal/api"
+	"prompttree/aicrew/internal/contract"
 	"prompttree/aicrew/internal/gitx"
+	"prompttree/aicrew/internal/review"
 	"prompttree/aicrew/internal/verify"
 )
 
@@ -36,6 +40,7 @@ type Host struct {
 	Git            gitx.Git
 	Agent          agent.Provider
 	Verifier       Verifier
+	Reviewer       review.Reviewer
 	WorkerID       string
 	Log            *slog.Logger
 	PollEvery      time.Duration
@@ -194,10 +199,16 @@ func (r *run) pipeline() error {
 	if err := r.move("IN_PROGRESS", api.Facts{BaseCommit: base}); err != nil {
 		return err
 	}
+	parsed, err := verify.ParseProfile(repo.VerificationProfile)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "bad_profile", Message: err.Error()}
+	}
+	profile := parsed.ForStage(verify.StageAttempt)
 
 	res, err := h.Agent.Run(r.ctx, agent.Request{
 		TaskID: t.ID, Attempt: t.Attempt, Role: "tech_lead", Prompt: t.Prompt, Workdir: path,
 		Timeout: time.Duration(t.AgentRuntimeSec) * time.Second, Previous: lessons(t.PreviousAttempts),
+		Checks: profile.Commands(),
 	})
 	if err != nil {
 		return err
@@ -218,10 +229,6 @@ func (r *run) pipeline() error {
 		return err
 	}
 
-	profile, err := verify.ParseProfile(repo.VerificationProfile)
-	if err != nil {
-		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "bad_profile", Message: err.Error()}
-	}
 	rep, err := h.Verifier.Run(r.ctx, profile, path, fmt.Sprintf("aicrew-verify-%s-%d", t.ID, t.Attempt),
 		time.Duration(t.VerifyRuntimeSec)*time.Second)
 	if user, lost := r.stopped(); user || lost {
@@ -241,11 +248,88 @@ func (r *run) pipeline() error {
 		return &failureWithDetails{Failure: agent.Failure{Class: class, Code: "verification_failed", Message: lastStep(rep)},
 			details: map[string]any{"verification": rep}}
 	}
-	if err := r.move("LLM_REVIEW", api.Facts{Details: map[string]any{"verification": rep}}); err != nil {
+	// Шаг 2: контракт архитектуры — код, а не LLM (ТЗ п. 9.2).
+	con, err := r.checkContract(path, base, facts.ChangedFiles)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "bad_contract", Message: err.Error()}
+	}
+	if len(con.Violations) > 0 {
+		return &failureWithDetails{
+			Failure: agent.Failure{Class: "QA_REJECT", Code: "contract_violation", Message: "architecture contract violated:\n" + con.String()},
+			details: map[string]any{"contract": con, "rejection_type": "contract"}}
+	}
+	if err := r.move("LLM_REVIEW", api.Facts{Details: map[string]any{"verification": rep, "contract": con}}); err != nil {
 		return err
 	}
-	// Logic QA / Tech Lead — этап 7.4; до тех пор ревью пропускается с пометкой.
-	return r.move("MERGEABLE", api.Facts{Reason: "LLM review is not enabled yet (stage 7.4)"})
+
+	// Шаги 3–4: Logic QA и, по пометке, Tech Lead. Модель предлагает вердикт, статус двигает сервер.
+	diff, err := h.Git.Diff(r.ctx, path, base, facts.ResultCommit)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "diff_failed", Message: err.Error()}
+	}
+	rf := review.Facts{Title: t.Title, Task: t.Prompt, Diff: diff, DiffStat: facts.DiffStat, ChangedFiles: facts.ChangedFiles,
+		Tests: rep.Tests(), Checks: rep.Steps, Contract: &con, AgentSummary: res.Summary}
+	roles := []string{review.RoleLogicQA}
+	if t.ReviewLevel == "tech_lead" {
+		roles = append(roles, review.RoleTechLead)
+	}
+	var verdicts []api.Verdict
+	for _, role := range roles {
+		v, err := r.review(role, path, rf)
+		if err != nil {
+			return err
+		}
+		verdicts = append(verdicts, v)
+	}
+	final := verdicts[len(verdicts)-1]
+	return r.move("MERGEABLE", api.Facts{Review: &final, ApprovalRequired: con.ApprovalRequired,
+		Details: map[string]any{"reviews": verdicts}})
+}
+
+// checkContract проверяет изменённые файлы по architecture.yaml из base_commit.
+func (r *run) checkContract(path, base string, changed []string) (contract.Result, error) {
+	raw, ok := r.h.Git.ShowFile(r.ctx, path, base, contract.FileName)
+	if !ok {
+		return contract.Result{}, nil // контракта нет — шаг пропускается, отметка в фактах (present: false)
+	}
+	c, err := contract.Parse(raw)
+	if err != nil {
+		return contract.Result{}, err
+	}
+	read := func(p string) ([]byte, bool) {
+		b, err := os.ReadFile(filepath.Join(path, filepath.FromSlash(p)))
+		return b, err == nil
+	}
+	return c.Check(changed, read, contract.DetectProject(read)), nil
+}
+
+// review — один ревьюер. Отказ — FAILED/QA_REJECT с замечаниями для следующей попытки.
+func (r *run) review(role, path string, f review.Facts) (api.Verdict, error) {
+	v, err := r.h.Reviewer.Review(r.ctx, role, r.t, path, f)
+	if user, lost := r.stopped(); user || lost {
+		return v, errStopped
+	}
+	var fa *agent.Failure
+	switch {
+	case errors.As(err, &fa):
+		return v, err
+	case errors.Is(err, api.ErrNotOwner):
+		r.mu.Lock()
+		r.lost = true
+		r.mu.Unlock()
+		return v, errStopped
+	case err != nil:
+		return v, &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: role + "_failed", Message: err.Error()}
+	}
+	if err := review.Validate(&v); err != nil {
+		return v, &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: role + "_invalid", Message: err.Error()}
+	}
+	if v.Verdict != "approve" {
+		return v, &failureWithDetails{
+			Failure: agent.Failure{Class: "QA_REJECT", Code: role + "_rejected", Message: v.Summary + "\n" + review.Issues(v)},
+			details: map[string]any{"review": v, "rejection_type": v.RejectionType}}
+	}
+	return v, nil
 }
 
 // ── очередь слияния (этап 7.3, docs/stage7-3-merge-queue.md) ──
@@ -361,7 +445,7 @@ func (r *run) verifyMerged(path, stage string) error {
 	if err != nil {
 		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "bad_profile", Message: err.Error()}
 	}
-	rep, err := h.Verifier.Run(r.ctx, profile, path, fmt.Sprintf("aicrew-verify-%s-%s-%d", stage, t.ID, t.Attempt),
+	rep, err := h.Verifier.Run(r.ctx, profile.ForStage(verify.StageMerge), path, fmt.Sprintf("aicrew-verify-%s-%s-%d", stage, t.ID, t.Attempt),
 		time.Duration(t.VerifyRuntimeSec)*time.Second)
 	if user, lost := r.stopped(); user || lost {
 		return errStopped
@@ -444,9 +528,11 @@ func lessons(prev []api.PreviousAttempt) []string {
 			line += " (" + *p.FailureCode + ")"
 		}
 		var facts struct {
-			Verification *verify.Report `json:"verification"`
-			Conflicts    []string       `json:"conflicted_files"`
-			Stage        string         `json:"stage"`
+			Verification *verify.Report   `json:"verification"`
+			Conflicts    []string         `json:"conflicted_files"`
+			Stage        string           `json:"stage"`
+			Review       *api.Verdict     `json:"review"`
+			Contract     *contract.Result `json:"contract"`
 		}
 		if json.Unmarshal(p.Facts, &facts) == nil {
 			if len(facts.Conflicts) > 0 {
@@ -456,7 +542,13 @@ func lessons(prev []api.PreviousAttempt) []string {
 			if facts.Stage == "post_merge" {
 				line += ": checks failed only after merging with other tasks' changes — make the task work together with them"
 			}
-			if facts.Verification != nil {
+			if facts.Contract != nil && len(facts.Contract.Violations) > 0 {
+				line += ": the architecture contract (architecture.yaml) forbids:\n" + facts.Contract.String()
+			}
+			if facts.Review != nil && facts.Review.Verdict == "reject" {
+				line += ": the reviewer rejected the change — " + facts.Review.Summary + "\n" + review.Issues(*facts.Review)
+			}
+			if facts.Verification != nil && facts.Review == nil {
 				if s := lastStep(*facts.Verification); s != "" {
 					line += ": " + s
 				}

@@ -29,6 +29,7 @@ type Notifier interface {
 
 type Service struct {
 	pool     *pgxpool.Pool
+	reviewer ReviewModel
 	notifier Notifier
 	log      *slog.Logger
 	now      func() time.Time
@@ -192,6 +193,30 @@ func (s *Service) CreateRepository(ctx context.Context, userID uuid.UUID, r Repo
 	return r, tx.Commit(ctx)
 }
 
+// UpdateVerificationProfile меняет профиль проверки репозитория. Профиль хранится на сервере,
+// а не в репозитории: исполнитель не может ослабить проверки своей правкой.
+func (s *Service) UpdateVerificationProfile(ctx context.Context, userID, repoID uuid.UUID, profile json.RawMessage) error {
+	if !json.Valid(profile) {
+		return ErrInvalid
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var project uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT project_id FROM exec.repositories WHERE id = $1`, repoID).Scan(&project); err != nil {
+		return ErrNotFound
+	}
+	if err := requireProjectWrite(ctx, tx, userID, project); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE exec.repositories SET verification_profile = $2 WHERE id = $1`, repoID, profile); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // ── задачи ──
 
 type NewTask struct {
@@ -204,6 +229,8 @@ type NewTask struct {
 	RequiredCapabilities []string    `json:"required_capabilities"`
 	DependsOn            []uuid.UUID `json:"depends_on"`
 	MaxAttempts          int         `json:"max_attempts"`
+	// ReviewLevel — logic (по умолчанию) или tech_lead: ещё и ревью Tech Lead (решение 7.4/4).
+	ReviewLevel string `json:"review_level"`
 }
 
 // finalTaskText — снимок итоговой задачи: роль + структура, если она есть, иначе исходник.
@@ -242,6 +269,9 @@ func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) 
 	if in.MaxAttempts <= 0 {
 		in.MaxAttempts = 3
 	}
+	if in.ReviewLevel == "" {
+		in.ReviewLevel = "logic"
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return uuid.Nil, err
@@ -277,9 +307,10 @@ func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) 
 	caps, _ := json.Marshal(nonNil(in.RequiredCapabilities))
 	id := uuid.Must(uuid.NewV7())
 	if _, err := tx.Exec(ctx, `INSERT INTO exec.tasks (id, project_id, node_id, repository_id, created_by, title, prompt, status,
-			execution_mode, execution_env, required_capabilities, max_attempts)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'QUEUED', $8, $9, $10, $11)`,
-		id, repoProject, in.NodeID, in.RepositoryID, userID, title, prompt, in.ExecutionMode, in.ExecutionEnv, caps, in.MaxAttempts); err != nil {
+			execution_mode, execution_env, required_capabilities, max_attempts, review_level)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'QUEUED', $8, $9, $10, $11, $12)`,
+		id, repoProject, in.NodeID, in.RepositoryID, userID, title, prompt, in.ExecutionMode, in.ExecutionEnv, caps, in.MaxAttempts,
+		in.ReviewLevel); err != nil {
 		if strings.Contains(err.Error(), "check constraint") {
 			return uuid.Nil, ErrInvalid
 		}
@@ -306,6 +337,7 @@ type ClaimedTask struct {
 	// Kind — что делать: execute (агент и проверка), merge (слить в integration), rollback (откатить слияние).
 	Kind             string         `json:"kind"`
 	ID               uuid.UUID      `json:"id"`
+	ReviewLevel      string         `json:"review_level"`
 	Attempt          int            `json:"attempt"`
 	Title            string         `json:"title"`
 	Prompt           string         `json:"prompt"`
@@ -362,8 +394,8 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		return job, nil
 	}
 	t := ClaimedTask{Kind: KindExecute}
-	err = tx.QueryRow(ctx, `SELECT t.id, t.attempt, t.title, t.prompt, t.execution_env, t.agent_runtime_sec, t.verification_runtime_sec,
-			r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
+	err = tx.QueryRow(ctx, `SELECT t.id, t.attempt, t.title, t.prompt, t.execution_env, t.review_level, t.agent_runtime_sec,
+			t.verification_runtime_sec, r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
 		FROM exec.tasks t
 		JOIN exec.repositories r ON r.id = t.repository_id
 		JOIN exec.hosts h ON h.id = r.host_id
@@ -377,7 +409,7 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		ORDER BY t.created_at
 		LIMIT 1
 		FOR UPDATE OF t SKIP LOCKED`, hostID, now).
-		Scan(&t.ID, &t.Attempt, &t.Title, &t.Prompt, &t.ExecutionEnv, &t.AgentRuntimeSec, &t.VerifyRuntimeSec,
+		Scan(&t.ID, &t.Attempt, &t.Title, &t.Prompt, &t.ExecutionEnv, &t.ReviewLevel, &t.AgentRuntimeSec, &t.VerifyRuntimeSec,
 			&t.Repository.ID, &t.Repository.ProjectID, &t.Repository.HostID, &t.Repository.Name, &t.Repository.LocalPath,
 			&t.Repository.DefaultBranch, &t.Repository.IntegrationBranch, &t.Repository.VerificationProfile)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -557,15 +589,19 @@ func leased(status string) bool {
 
 // Facts — машинные факты от хоста (ТЗ п. 7: собирает код, а не модель).
 type Facts struct {
-	BaseCommit    string          `json:"base_commit,omitempty"`
-	ResultCommit  string          `json:"result_commit,omitempty"`
-	MergeCommit   string          `json:"merge_commit,omitempty"`
-	RevertCommit  string          `json:"revert_commit,omitempty"`
-	FailureCode   string          `json:"failure_code,omitempty"`
-	FailureClass  string          `json:"failure_class,omitempty"`
-	RetryAfterSec int             `json:"retry_after_sec,omitempty"`
-	Reason        string          `json:"reason,omitempty"`
-	Details       json.RawMessage `json:"details,omitempty"` // exit-коды, файлы, diff --stat, расход, итог агента
+	BaseCommit    string `json:"base_commit,omitempty"`
+	ResultCommit  string `json:"result_commit,omitempty"`
+	MergeCommit   string `json:"merge_commit,omitempty"`
+	RevertCommit  string `json:"revert_commit,omitempty"`
+	FailureCode   string `json:"failure_code,omitempty"`
+	FailureClass  string `json:"failure_class,omitempty"`
+	RetryAfterSec int    `json:"retry_after_sec,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	// Review — вердикт ревьюера; без одобрения задача не становится MERGEABLE (7.4).
+	Review *ReviewVerdict `json:"review,omitempty"`
+	// ApprovalRequired — изменённые protected_paths контракта: сливать только по «Слить» (решение 7.4/2).
+	ApprovalRequired []string        `json:"approval_required,omitempty"`
+	Details          json.RawMessage `json:"details,omitempty"` // exit-коды, файлы, diff --stat, расход, итог агента
 }
 
 // Transition — воркер просит переход. Сервер проверяет владельца и таблицу переходов;
@@ -594,6 +630,22 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 		return "", fmt.Errorf("%w: cancellation requested", ErrBadTransition)
 	}
 	actor := "worker:" + workerID.String()
+	if to == StatusMergeable {
+		if f.Review == nil {
+			return "", fmt.Errorf("%w: MERGEABLE requires a review verdict", ErrInvalid)
+		}
+		if err := f.Review.Validate(); err != nil {
+			return "", fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		if f.Review.Verdict != VerdictApprove {
+			return "", fmt.Errorf("%w: rejected work cannot become MERGEABLE", ErrBadTransition)
+		}
+		review, _ := json.Marshal(f.Review)
+		approval, _ := json.Marshal(nonNil(f.ApprovalRequired))
+		if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET review = $2, approval_required = $3 WHERE id = $1`, taskID, review, approval); err != nil {
+			return "", err
+		}
+	}
 	if f.BaseCommit != "" {
 		if _, err := tx.Exec(ctx, `UPDATE exec.tasks SET base_commit = $2 WHERE id = $1`, taskID, f.BaseCommit); err != nil {
 			return "", err
@@ -617,6 +669,16 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 	details := f.Details
 	if len(details) == 0 {
 		details = json.RawMessage(`{}`)
+	}
+	if f.Review != nil {
+		// Вердикт хранится и в фактах попытки: отказ и замечания видит следующая попытка.
+		var m map[string]any
+		_ = json.Unmarshal(details, &m)
+		if m == nil {
+			m = map[string]any{}
+		}
+		m["review"] = f.Review
+		details, _ = json.Marshal(m)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE exec.attempts SET status = $3,
 			base_commit = COALESCE(NULLIF($4, ''), base_commit), result_commit = COALESCE(NULLIF($5, ''), result_commit),
@@ -677,7 +739,8 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 			return "", err
 		}
 		// semi_auto и night: проверенный результат сам встаёт в очередь слияния; manual ждёт «Слить».
-		if to == StatusMergeable && t.mode != "manual" {
+		// Правки protected_paths ждут «Слить» в любом режиме (решение 7.4/2).
+		if to == StatusMergeable && t.mode != "manual" && len(f.ApprovalRequired) == 0 {
 			if err := s.queueMerge(ctx, tx, taskID, "system", "auto merge: "+t.mode); err != nil {
 				return "", err
 			}
@@ -1054,14 +1117,18 @@ type TaskView struct {
 	ResultCommit *string    `json:"result_commit"`
 	MergeCommit  *string    `json:"merge_commit"`
 	Mode         string     `json:"execution_mode"`
-	RetryAfter   *time.Time `json:"retry_after"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ReviewLevel  string     `json:"review_level"`
+	// ApprovalRequired — что требует вашего одобрения перед слиянием.
+	ApprovalRequired []string        `json:"approval_required"`
+	Review           json.RawMessage `json:"review"`
+	RetryAfter       *time.Time      `json:"retry_after"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 func (s *Service) ListTasks(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID) ([]TaskView, error) {
 	rows, err := s.pool.Query(ctx, `SELECT t.id, t.project_id, t.node_id, t.repository_id, t.title, t.status, t.attempt,
 			t.max_attempts, t.failure_class, t.failure_code, t.base_commit, t.result_commit, t.merge_commit, t.execution_mode,
-			t.retry_after, t.updated_at
+			t.review_level, t.approval_required, t.review, t.retry_after, t.updated_at
 		FROM exec.tasks t JOIN core.project_access a ON a.project_id = t.project_id AND a.user_id = $1
 		WHERE ($2::uuid IS NULL OR t.project_id = $2) ORDER BY t.updated_at DESC LIMIT 500`, userID, projectID)
 	if err != nil {
@@ -1070,7 +1137,8 @@ func (s *Service) ListTasks(ctx context.Context, userID uuid.UUID, projectID *uu
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (TaskView, error) {
 		var v TaskView
 		err := r.Scan(&v.ID, &v.ProjectID, &v.NodeID, &v.RepositoryID, &v.Title, &v.Status, &v.Attempt, &v.MaxAttempts,
-			&v.FailureClass, &v.FailureCode, &v.BaseCommit, &v.ResultCommit, &v.MergeCommit, &v.Mode, &v.RetryAfter, &v.UpdatedAt)
+			&v.FailureClass, &v.FailureCode, &v.BaseCommit, &v.ResultCommit, &v.MergeCommit, &v.Mode, &v.ReviewLevel, &v.ApprovalRequired,
+			&v.Review, &v.RetryAfter, &v.UpdatedAt)
 		return v, err
 	})
 }

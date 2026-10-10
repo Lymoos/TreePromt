@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -171,7 +172,60 @@ func (s *Server) handleExecRollback(w http.ResponseWriter, r *http.Request, id c
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleExecUpdateProfile — профиль проверки репозитория (шаблон flutter/go/web и шаги).
+func (s *Server) handleExecUpdateProfile(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	repoID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Profile json.RawMessage `json:"verification_profile"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.exec.UpdateVerificationProfile(r.Context(), id.UserID, repoID, req.Profile); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ── протокол хоста ──
+
+// handleExecReview — Logic QA моделью сервера. 503 not_configured — ключа нет, хост ревьюит сам.
+func (s *Server) handleExecReview(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	taskID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		WorkerID uuid.UUID `json:"worker_id"`
+		Attempt  int       `json:"attempt"`
+		System   string    `json:"system"`
+		User     string    `json:"user"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	v, err := s.exec.Review(r.Context(), execIdentity(id), taskID, req.WorkerID, req.Attempt, req.System, req.User)
+	if errors.Is(err, exec.ErrReviewerNotConfigured) {
+		writeError(w, http.StatusServiceUnavailable, "not_configured", err.Error())
+		return
+	}
+	switch {
+	case err == nil:
+	case errors.Is(err, exec.ErrNotOwner), errors.Is(err, exec.ErrForbidden), errors.Is(err, exec.ErrInvalid), errors.Is(err, exec.ErrNotFound):
+		s.execError(w, r, err)
+		return
+	default:
+		// Сбой модели: хост классифицирует его как ENVIRONMENT_FAILURE.
+		s.log.Warn("logic qa model failed", "task", taskID, "err", err)
+		writeError(w, http.StatusBadGateway, "model_failed", "review model failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
 
 func (s *Server) handleExecClaim(w http.ResponseWriter, r *http.Request, id core.Identity) {
 	var req struct {

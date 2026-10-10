@@ -112,7 +112,7 @@ func TestE2EHostAgainstRealServer(t *testing.T) {
 	worker := h.Workers["claude_code/sonnet"]
 	base := &Host{API: c, Git: gitx.Git{R: runner.New("git")}, WorkerID: worker,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), PollEvery: 50 * time.Millisecond, HeartbeatEvery: 100 * time.Millisecond,
-		Verifier: fakeVerifier{rep: verify.Report{Passed: true}}}
+		Verifier: fakeVerifier{rep: verify.Report{Passed: true}}, Reviewer: &fakeReviewer{}}
 
 	// 1. Успех: задача доходит до MERGEABLE, факты на сервере.
 	first := newTask("Добавить список задач")

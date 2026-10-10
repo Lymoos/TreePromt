@@ -211,6 +211,7 @@ type Task struct {
 	Repository       Repository        `json:"repository"`
 	PreviousAttempts []PreviousAttempt `json:"previous_attempts"`
 	MergeCommit      string            `json:"merge_commit"`
+	ReviewLevel      string            `json:"review_level"` // logic | tech_lead
 }
 
 // Integration — ветка, в которую AiCrew сливает результаты (никогда не main).
@@ -241,15 +242,19 @@ func (c *Client) Heartbeat(ctx context.Context, taskID, workerID string, attempt
 }
 
 type Facts struct {
-	BaseCommit    string `json:"base_commit,omitempty"`
-	ResultCommit  string `json:"result_commit,omitempty"`
-	MergeCommit   string `json:"merge_commit,omitempty"`
-	RevertCommit  string `json:"revert_commit,omitempty"`
-	FailureCode   string `json:"failure_code,omitempty"`
-	FailureClass  string `json:"failure_class,omitempty"`
-	RetryAfterSec int    `json:"retry_after_sec,omitempty"`
-	Reason        string `json:"reason,omitempty"`
-	Details       any    `json:"details,omitempty"`
+	BaseCommit   string `json:"base_commit,omitempty"`
+	ResultCommit string `json:"result_commit,omitempty"`
+	MergeCommit  string `json:"merge_commit,omitempty"`
+	RevertCommit string `json:"revert_commit,omitempty"`
+	// Review — вердикт ревьюера: без approve сервер не пустит задачу в MERGEABLE (7.4).
+	Review *Verdict `json:"review,omitempty"`
+	// ApprovalRequired — изменённые protected_paths контракта.
+	ApprovalRequired []string `json:"approval_required,omitempty"`
+	FailureCode      string   `json:"failure_code,omitempty"`
+	FailureClass     string   `json:"failure_class,omitempty"`
+	RetryAfterSec    int      `json:"retry_after_sec,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
+	Details          any      `json:"details,omitempty"`
 }
 
 func (c *Client) Transition(ctx context.Context, taskID, workerID string, attempt int, to string, f Facts) (string, error) {
@@ -305,4 +310,44 @@ func (c *Client) ListRepositories(ctx context.Context) ([]struct {
 	}
 	_, err := c.authed(ctx, http.MethodGet, "/exec/repositories", nil, &out)
 	return out.Repos, err
+}
+
+// ── ревью (этап 7.4) ──
+
+type Issue struct {
+	File     string `json:"file"`
+	Line     int    `json:"line,omitempty"`
+	Severity string `json:"severity"` // blocker | major | minor
+	Message  string `json:"message"`
+}
+
+// Verdict — ответ ревьюера; сервер проверяет его ещё раз при переходе в MERGEABLE.
+type Verdict struct {
+	Verdict       string  `json:"verdict"` // approve | reject
+	RejectionType string  `json:"rejection_type,omitempty"`
+	Issues        []Issue `json:"issues"`
+	Summary       string  `json:"summary"`
+	Reviewer      string  `json:"reviewer,omitempty"`
+}
+
+// ErrReviewerNotConfigured — у сервера нет модели Logic QA (нет ключа Gemini).
+var ErrReviewerNotConfigured = errors.New("server has no logic QA model")
+
+// Review — Logic QA моделью сервера (Gemini). Промпт с фактами собирает хост.
+func (c *Client) Review(ctx context.Context, taskID, workerID string, attempt int, system, user string) (Verdict, error) {
+	var v Verdict
+	_, err := c.authed(ctx, http.MethodPost, "/exec/tasks/"+taskID+"/review",
+		map[string]any{"worker_id": workerID, "attempt": attempt, "system": system, "user": user}, &v)
+	var ae *APIError
+	if errors.As(err, &ae) && ae.Code == "not_configured" {
+		return v, ErrReviewerNotConfigured
+	}
+	return v, ownerErr(err)
+}
+
+// UpdateProfile меняет профиль проверки репозитория на сервере.
+func (c *Client) UpdateProfile(ctx context.Context, repoID string, profile json.RawMessage) error {
+	_, err := c.authed(ctx, http.MethodPut, "/exec/repositories/"+repoID+"/profile",
+		map[string]any{"verification_profile": profile}, nil)
+	return err
 }

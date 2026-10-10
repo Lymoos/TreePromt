@@ -41,9 +41,17 @@ func (c *ClaudeCode) Run(ctx context.Context, req Request) (Result, error) {
 	if len(tools) == 0 {
 		tools = []string{"Read", "Edit", "Write", "Glob", "Grep", "Bash"}
 	}
-	args := []string{"run", "--rm", "-i", "--name", ContainerName(req.TaskID, req.Attempt),
+	name := req.Name
+	if name == "" {
+		name = ContainerName(req.TaskID, req.Attempt)
+	}
+	mount := req.Workdir + ":/work"
+	if req.ReadOnly {
+		mount += ":ro"
+	}
+	args := []string{"run", "--rm", "-i", "--name", name,
 		"--memory", "6g", "--cpus", "4", "--pids-limit", "512",
-		"-v", req.Workdir + ":/work", "-w", "/work",
+		"-v", mount, "-w", "/work",
 		"-e", "CLAUDE_CODE_OAUTH_TOKEN"}
 	if c.Network != "" {
 		args = append(args, "--network", c.Network)
@@ -53,11 +61,15 @@ func (c *ClaudeCode) Run(ctx context.Context, req Request) (Result, error) {
 		"--output-format", "stream-json", "--verbose",
 		"--model", c.Model,
 		"--max-turns", strconv.Itoa(maxTurns),
-		"--permission-mode", "acceptEdits",
+		"--permission-mode", permissionMode(req),
 		"--allowedTools", strings.Join(tools, ","))
+	prompt := BuildPrompt(req)
+	if req.Raw {
+		prompt = req.Prompt
+	}
 	var lines []string
 	res, err := c.R.Run(ctx, runner.Command{
-		Exe: "docker", Args: args, Timeout: req.Timeout, Stdin: BuildPrompt(req),
+		Exe: "docker", Args: args, Timeout: req.Timeout, Stdin: prompt,
 		Env:    []string{"CLAUDE_CODE_OAUTH_TOKEN=" + token},
 		Stdout: func(l string) { lines = append(lines, l) },
 	})
@@ -77,6 +89,13 @@ func (c *ClaudeCode) Run(ctx context.Context, req Request) (Result, error) {
 		return out, fail
 	}
 	return out, nil
+}
+
+func permissionMode(req Request) string {
+	if req.ReadOnly {
+		return "default" // правки запрещены: инструменты только для чтения, worktree смонтирован :ro
+	}
+	return "acceptEdits"
 }
 
 func (c *ClaudeCode) Stop(ctx context.Context, taskID string, attempt int) error {

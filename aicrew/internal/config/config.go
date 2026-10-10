@@ -17,6 +17,9 @@ type Config struct {
 	// Образ контейнера исполнителя и проверок.
 	AgentImage  string `json:"agent_image"`
 	ClaudeModel string `json:"claude_model"`
+	// Ревьюеры (7.4): Logic QA, пока у сервера нет Gemini, и Tech Lead.
+	ReviewModel   string `json:"review_model"`
+	TechLeadModel string `json:"tech_lead_model"`
 	// Сколько задач одновременно (решение 7.1: одна).
 	Concurrency int `json:"concurrency"`
 }
@@ -40,12 +43,14 @@ func Path() (string, error) {
 func Defaults() Config {
 	host, _ := os.Hostname()
 	return Config{
-		HostName:     host,
-		Capabilities: []string{"flutter", "go", "web"},
-		Environments: []string{"container"},
-		AgentImage:   "aicrew-agent-flutter:local",
-		ClaudeModel:  "sonnet",
-		Concurrency:  1,
+		HostName:      host,
+		Capabilities:  []string{"flutter", "go", "web"},
+		Environments:  []string{"container"},
+		AgentImage:    "aicrew-agent-flutter:local",
+		ClaudeModel:   "sonnet",
+		ReviewModel:   "haiku",
+		TechLeadModel: "sonnet",
+		Concurrency:   1,
 	}
 }
 

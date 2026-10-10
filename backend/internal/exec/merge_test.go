@@ -18,7 +18,7 @@ func (f *fx) toMergeable(c *ClaimedTask) string {
 	f.move(c, StatusInProgress, Facts{BaseCommit: "base"})
 	f.move(c, StatusVerifying, Facts{ResultCommit: "result"})
 	f.move(c, StatusLLMReview, Facts{})
-	return f.move(c, StatusMergeable, Facts{})
+	return f.move(c, StatusMergeable, Facts{Review: approve()})
 }
 
 func (f *fx) mergeable(opts ...func(*NewTask)) uuid.UUID {

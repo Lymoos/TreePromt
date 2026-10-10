@@ -54,8 +54,10 @@ func run(log *slog.Logger) error {
 	treeSvc := tree.NewService(pool, hub, log)
 
 	var model ai.Model
+	var gemini *ai.Gemini
 	if cfg.GeminiAPIKey != "" {
-		model = ai.NewGemini(cfg.GeminiAPIKey, cfg.GeminiModel).WithBaseURL(cfg.GeminiBaseURL)
+		gemini = ai.NewGemini(cfg.GeminiAPIKey, cfg.GeminiModel).WithBaseURL(cfg.GeminiBaseURL)
+		model = gemini
 	} else {
 		log.Warn("GEMINI_API_KEY is not set: structuring is disabled")
 	}
@@ -65,6 +67,9 @@ func run(log *slog.Logger) error {
 	}
 
 	execSvc := exec.NewService(pool, hub, log)
+	if gemini != nil {
+		execSvc.SetReviewer(gemini) // Logic QA (7.4); без ключа хост ревьюит через Claude Haiku
+	}
 	go execSvc.RunReaper(ctx, 15*time.Second) // истёкшие lease → повтор (ТЗ п. 8.2)
 
 	api := httpapi.New(auth, tokens, treeSvc, aiSvc, execSvc, hub, log, httpapi.Options{

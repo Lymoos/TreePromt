@@ -21,6 +21,14 @@ type Request struct {
 	MaxTurns int
 	// Previous — факты прошлых попыток (класс ошибки, хвост вывода тестов), чтобы не повторять ошибку.
 	Previous []string
+	// Checks — команды профиля проверки: исполнитель прогоняет их сам до завершения.
+	Checks []string
+	// Raw — Prompt передаётся как есть, без правил исполнителя (ревьюеры).
+	Raw bool
+	// ReadOnly — worktree монтируется только для чтения (ревьюеры).
+	ReadOnly bool
+	// Name — имя контейнера; пусто — aicrew-task-<id>-<attempt>.
+	Name string
 }
 
 type Usage struct {
@@ -62,7 +70,15 @@ func BuildPrompt(req Request) string {
 	b.WriteString("- You work inside a disposable sandbox. The repository is in the current directory; nothing else is available.\n")
 	b.WriteString("- Do not run git commands: the orchestrator commits your changes and collects the diff itself.\n")
 	b.WriteString("- Do not add dependencies or change the database schema unless the task explicitly asks for it.\n")
-	b.WriteString("- Run the project's tests before finishing. Finish with a short summary of what you changed.\n")
+	if len(req.Checks) > 0 {
+		b.WriteString("- Before finishing, make sure these checks pass (the orchestrator runs exactly them):\n")
+		for _, c := range req.Checks {
+			b.WriteString("    " + c + "\n")
+		}
+		b.WriteString("- Finish with a short summary of what you changed.\n")
+	} else {
+		b.WriteString("- Run the project's tests before finishing. Finish with a short summary of what you changed.\n")
+	}
 	if len(req.Previous) > 0 {
 		b.WriteString("\nPrevious attempts of this task failed. Do not repeat these mistakes:\n")
 		for _, p := range req.Previous {

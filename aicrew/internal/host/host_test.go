@@ -17,6 +17,7 @@ import (
 	"prompttree/aicrew/internal/agent"
 	"prompttree/aicrew/internal/api"
 	"prompttree/aicrew/internal/gitx"
+	"prompttree/aicrew/internal/review"
 	"prompttree/aicrew/internal/runner"
 	"prompttree/aicrew/internal/verify"
 )
@@ -114,8 +115,26 @@ func gitRepo(t *testing.T) string {
 	return dir
 }
 
+// fakeReviewer — ревьюер: по умолчанию одобряет; записывает, какие роли его звали.
+type fakeReviewer struct {
+	mu      sync.Mutex
+	verdict map[string]api.Verdict
+	roles   []string
+	facts   review.Facts
+}
+
+func (r *fakeReviewer) Review(_ context.Context, role string, _ *api.Task, _ string, f review.Facts) (api.Verdict, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.roles, r.facts = append(r.roles, role), f
+	if v, ok := r.verdict[role]; ok {
+		return v, nil
+	}
+	return api.Verdict{Verdict: "approve", Issues: []api.Issue{}, Summary: "ok", Reviewer: role + ":fake"}, nil
+}
+
 func newHost(t *testing.T, srv *fakeServer, ag *fakeAgent, v fakeVerifier) *Host {
-	return &Host{API: srv, Git: gitx.Git{R: runner.New("git")}, Agent: ag, Verifier: v, WorkerID: "w1",
+	return &Host{API: srv, Git: gitx.Git{R: runner.New("git")}, Agent: ag, Verifier: v, Reviewer: &fakeReviewer{}, WorkerID: "w1",
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), PollEvery: 10 * time.Millisecond, HeartbeatEvery: 20 * time.Millisecond}
 }
 

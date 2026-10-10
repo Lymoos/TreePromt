@@ -147,6 +147,21 @@ func (g Git) Autocommit(ctx context.Context, worktree, base, message string) (Fa
 	return f, err
 }
 
+// Diff — полный diff результата относительно base (факт для ревьюера, ТЗ п. 9).
+func (g Git) Diff(ctx context.Context, worktree, base, head string) (string, error) {
+	return g.run(ctx, worktree, "diff", "--no-color", "--no-ext-diff", base, head)
+}
+
+// ShowFile — содержимое файла в коммите; false — файла там нет.
+// Контракт архитектуры читается из base_commit: исполнитель не может ослабить его своей правкой.
+func (g Git) ShowFile(ctx context.Context, repo, commit, path string) ([]byte, bool) {
+	res, err := g.R.Run(ctx, runner.Command{Exe: "git", Args: []string{"show", commit + ":" + path}, Dir: repo, Timeout: time.Minute})
+	if err != nil || res.ExitCode != 0 {
+		return nil, false
+	}
+	return []byte(res.Stdout), true
+}
+
 // ── очередь слияния (этап 7.3) ──
 
 func (g Git) RevParse(ctx context.Context, repo, ref string) (string, error) {
