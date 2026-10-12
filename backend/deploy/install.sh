@@ -9,6 +9,15 @@ set -euo pipefail
 DIR=/opt/prompttree
 RAW=https://raw.githubusercontent.com/Lymoos/TreePromt/main/backend/deploy
 
+# Адрес, по которому к серверу подключаются: из текущей SSH-сессии (исходящий трафик
+# может уходить с другого IP, например через VPN), иначе — как его видят снаружи.
+public_ip() {
+  local ip
+  ip=$(echo "${SSH_CONNECTION:-}" | awk '{print $3}')
+  [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || ip=$(curl -fsS4 https://api.ipify.org || true)
+  echo "$ip"
+}
+
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 fail() { printf '\nОшибка: %s\n' "$*" >&2; exit 1; }
 
@@ -42,7 +51,7 @@ if [ -f .env ]; then
   set +a
 else
   say "2/6 Настройки"
-  IP_NOW=$(curl -fsS4 https://api.ipify.org || true)
+  IP_NOW=$(public_ip)
   [ -n "$IP_NOW" ] && echo "Своего домена нет? Подойдёт ${IP_NOW//./-}.sslip.io — он сам указывает на этот сервер."
   read -rp "Домен (DNS должен указывать на этот сервер): " DOMAIN
   [ -n "$DOMAIN" ] || fail "домен обязателен: без него не получить HTTPS-сертификат"
@@ -80,7 +89,7 @@ fi
 if [ "${HTTPS_PORT:-443}" != 443 ] && ss -tlnH "sport = :${HTTPS_PORT}" | grep -q . && ! docker ps --format '{{.Names}}' | grep -q caddy; then
   fail "порт ${HTTPS_PORT} тоже занят"
 fi
-MY_IP=$(curl -fsS4 https://api.ipify.org || true)
+MY_IP=$(public_ip)
 DNS_IP=$(dig +short A "$DOMAIN" | tail -n1 || true)
 if [ -n "$MY_IP" ] && [ "$DNS_IP" != "$MY_IP" ]; then
   echo "Внимание: $DOMAIN указывает на '${DNS_IP:-ничего}', а этот сервер — $MY_IP."
