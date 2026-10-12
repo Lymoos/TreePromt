@@ -168,10 +168,20 @@ type Host struct {
 	Workers map[string]string `json:"workers"`
 }
 
-func (c *Client) RegisterHost(ctx context.Context, name, os string, caps, envs []string, workers []WorkerSpec) (Host, error) {
+// Registries — что хост умеет подключать (7.5): по этим спискам сервер проверяет планы Manager'а.
+type Registries struct {
+	Skills      []string `json:"skills"`
+	MCPProfiles []string `json:"mcp_profiles"`
+	Executors   []string `json:"executors"`
+}
+
+func (c *Client) RegisterHost(ctx context.Context, name, os string, caps, envs []string, workers []WorkerSpec, reg ...Registries) (Host, error) {
 	var h Host
-	_, err := c.authed(ctx, http.MethodPost, "/exec/hosts", map[string]any{
-		"name": name, "os": os, "capabilities": caps, "environments": envs, "workers": workers}, &h)
+	body := map[string]any{"name": name, "os": os, "capabilities": caps, "environments": envs, "workers": workers}
+	if len(reg) > 0 {
+		body["skills"], body["mcp_profiles"], body["executors"] = reg[0].Skills, reg[0].MCPProfiles, reg[0].Executors
+	}
+	_, err := c.authed(ctx, http.MethodPost, "/exec/hosts", body, &h)
 	return h, err
 }
 
@@ -212,6 +222,10 @@ type Task struct {
 	PreviousAttempts []PreviousAttempt `json:"previous_attempts"`
 	MergeCommit      string            `json:"merge_commit"`
 	ReviewLevel      string            `json:"review_level"` // logic | tech_lead
+	RequiredSkills   []string          `json:"required_skills"`
+	MCPProfile       string            `json:"mcp_profile"`
+	TouchesUI        bool              `json:"touches_ui"`
+	Executor         string            `json:"executor"` // claude | junior
 }
 
 // Integration — ветка, в которую AiCrew сливает результаты (никогда не main).
@@ -350,4 +364,37 @@ func (c *Client) UpdateProfile(ctx context.Context, repoID string, profile json.
 	_, err := c.authed(ctx, http.MethodPut, "/exec/repositories/"+repoID+"/profile",
 		map[string]any{"verification_profile": profile}, nil)
 	return err
+}
+
+// ── планы Manager'а (этап 7.5) ──
+
+const KindPlan = "plan"
+
+type PlanTask struct {
+	Title                string   `json:"title"`
+	Prompt               string   `json:"prompt"`
+	DependsOn            []int    `json:"depends_on"`
+	RequiredCapabilities []string `json:"required_capabilities"`
+	ExecutionEnv         string   `json:"execution_env"`
+	ReviewLevel          string   `json:"review_level"`
+	TouchesUI            bool     `json:"touches_ui"`
+	RequiredSkills       []string `json:"required_skills"`
+	MCPProfile           string   `json:"mcp_profile"`
+	Executor             string   `json:"executor"`
+}
+
+type Proposal struct {
+	Tasks     []PlanTask `json:"tasks"`
+	Rationale string     `json:"rationale"`
+}
+
+// SubmitPlan сдаёт результат Manager'а (или причину неудачи). Ответ — статус плана и причина отказа.
+func (c *Client) SubmitPlan(ctx context.Context, planID, workerID string, attempt int, p *Proposal, failure string) (string, string, error) {
+	var out struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	_, err := c.authed(ctx, http.MethodPost, "/exec/plans/"+planID+"/result",
+		map[string]any{"worker_id": workerID, "attempt": attempt, "proposal": p, "failure": failure}, &out)
+	return out.Status, out.Error, ownerErr(err)
 }

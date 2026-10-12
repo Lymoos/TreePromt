@@ -19,7 +19,10 @@ import (
 	"prompttree/aicrew/internal/api"
 	"prompttree/aicrew/internal/contract"
 	"prompttree/aicrew/internal/gitx"
+	"prompttree/aicrew/internal/manager"
+	"prompttree/aicrew/internal/mcp"
 	"prompttree/aicrew/internal/review"
+	"prompttree/aicrew/internal/skills"
 	"prompttree/aicrew/internal/verify"
 )
 
@@ -29,6 +32,7 @@ type Server interface {
 	Heartbeat(ctx context.Context, taskID, workerID string, attempt int) (bool, error)
 	Transition(ctx context.Context, taskID, workerID string, attempt int, to string, f api.Facts) (string, error)
 	KeepWorktrees(ctx context.Context) (map[string]bool, error)
+	SubmitPlan(ctx context.Context, planID, workerID string, attempt int, p *api.Proposal, failure string) (string, string, error)
 }
 
 type Verifier interface {
@@ -36,11 +40,17 @@ type Verifier interface {
 }
 
 type Host struct {
-	API            Server
-	Git            gitx.Git
-	Agent          agent.Provider
-	Verifier       Verifier
-	Reviewer       review.Reviewer
+	API      Server
+	Git      gitx.Git
+	Agent    agent.Provider
+	Verifier Verifier
+	Reviewer review.Reviewer
+	// 7.5: Junior (Claude Code на локальной модели), реестры скиллов и MCP, Manager.
+	Junior         agent.Provider
+	Skills         *skills.Registry
+	MCP            *mcp.Registry
+	Planner        Planner
+	Catalog        manager.Catalog
 	WorkerID       string
 	Log            *slog.Logger
 	PollEvery      time.Duration
@@ -136,6 +146,11 @@ func (h *Host) Process(parent context.Context, t *api.Task) {
 	}
 	log := h.Log.With("task", t.ID, "attempt", t.Attempt, "kind", kind)
 	log.Info("task claimed", "title", t.Title)
+	if kind == api.KindPlan {
+		// У плана свой lease без heartbeat (Manager работает минуты) и свой отчёт серверу.
+		r.plan(log)
+		return
+	}
 
 	// Heartbeat: продлевает lease и приносит отмену.
 	hbDone := make(chan struct{})
@@ -205,11 +220,30 @@ func (r *run) pipeline() error {
 	}
 	profile := parsed.ForStage(verify.StageAttempt)
 
-	res, err := h.Agent.Run(r.ctx, agent.Request{
-		TaskID: t.ID, Attempt: t.Attempt, Role: "tech_lead", Prompt: t.Prompt, Workdir: path,
+	// Исполнитель, скиллы и MCP-профиль задачи (7.5). Подключается только то, что есть в реестрах.
+	ag, role := h.Agent, "tech_lead"
+	if t.Executor == "junior" {
+		if h.Junior == nil {
+			return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "no_junior", Message: "this host has no local model for junior tasks"}
+		}
+		ag, role = h.Junior, "junior"
+	}
+	req := agent.Request{
+		TaskID: t.ID, Attempt: t.Attempt, Role: role, Prompt: t.Prompt, Workdir: path,
 		Timeout: time.Duration(t.AgentRuntimeSec) * time.Second, Previous: lessons(t.PreviousAttempts),
 		Checks: profile.Commands(),
-	})
+	}
+	attached, cleanup, err := r.attachSkills(&req)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "skills_failed", Message: err.Error()}
+	}
+	defer cleanup()
+	mcpRes, err := r.attachMCP(&req)
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "mcp_profile_failed", Message: err.Error()}
+	}
+
+	res, err := ag.Run(r.ctx, req)
 	if err != nil {
 		return err
 	}
@@ -225,7 +259,8 @@ func (r *run) pipeline() error {
 		return &agent.Failure{Class: "AGENT_ERROR", Code: "no_changes", Message: "agent finished without changing any file"}
 	}
 	if err := r.move("VERIFYING", api.Facts{ResultCommit: facts.ResultCommit, Details: map[string]any{
-		"changed_files": facts.ChangedFiles, "diff_stat": facts.DiffStat, "agent": res}}); err != nil {
+		"changed_files": facts.ChangedFiles, "diff_stat": facts.DiffStat, "agent": res,
+		"executor": role, "skills": attached, "mcp": mcpRes}}); err != nil {
 		return err
 	}
 

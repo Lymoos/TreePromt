@@ -23,24 +23,34 @@ type ClaudeCode struct {
 	Token        TokenSource
 	AllowedTools []string
 	Network      string // сеть контейнера; allowlist-прокси — этап 7.6
+	// LocalBaseURL — Junior (7.5b): Claude Code ходит не в облако, а в Ollama на этом ПК
+	// (Anthropic-совместимый API Ollama). Токен подписки тогда не нужен и не передаётся.
+	LocalBaseURL string
 }
 
 func (c *ClaudeCode) Name() string { return "claude_code/" + c.Model }
 
 func (c *ClaudeCode) Run(ctx context.Context, req Request) (Result, error) {
-	token, err := c.Token()
-	if err != nil || token == "" {
-		return Result{}, &Failure{Class: "AUTH_ERROR", Code: "no_claude_token",
-			Message: "Claude Code token is not set on this host: run `aicrew-host set-claude-token`"}
+	var env []string
+	if c.LocalBaseURL != "" {
+		env = []string{"ANTHROPIC_BASE_URL=" + c.LocalBaseURL, "ANTHROPIC_AUTH_TOKEN=ollama", "ANTHROPIC_API_KEY="}
+	} else {
+		token, err := c.Token()
+		if err != nil || token == "" {
+			return Result{}, &Failure{Class: "AUTH_ERROR", Code: "no_claude_token",
+				Message: "Claude Code token is not set on this host: run `aicrew-host set-claude-token`"}
+		}
+		env = []string{"CLAUDE_CODE_OAUTH_TOKEN=" + token}
 	}
 	maxTurns := req.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 60
 	}
-	tools := c.AllowedTools
+	tools := append([]string{}, c.AllowedTools...)
 	if len(tools) == 0 {
 		tools = []string{"Read", "Edit", "Write", "Glob", "Grep", "Bash"}
 	}
+	tools = append(tools, req.ExtraTools...) // инструменты MCP-профиля задачи
 	name := req.Name
 	if name == "" {
 		name = ContainerName(req.TaskID, req.Attempt)
@@ -51,8 +61,17 @@ func (c *ClaudeCode) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	args := []string{"run", "--rm", "-i", "--name", name,
 		"--memory", "6g", "--cpus", "4", "--pids-limit", "512",
-		"-v", mount, "-w", "/work",
-		"-e", "CLAUDE_CODE_OAUTH_TOKEN"}
+		"-v", mount, "-w", "/work"}
+	for _, m := range req.Mounts {
+		v := m.Host + ":" + m.Container
+		if m.ReadOnly {
+			v += ":ro"
+		}
+		args = append(args, "-v", v)
+	}
+	for _, kv := range env {
+		args = append(args, "-e", strings.SplitN(kv, "=", 2)[0]) // значение — из окружения процесса docker
+	}
 	if c.Network != "" {
 		args = append(args, "--network", c.Network)
 	}
@@ -63,6 +82,10 @@ func (c *ClaudeCode) Run(ctx context.Context, req Request) (Result, error) {
 		"--max-turns", strconv.Itoa(maxTurns),
 		"--permission-mode", permissionMode(req),
 		"--allowedTools", strings.Join(tools, ","))
+	if len(req.MCPConfig) > 0 {
+		// Только серверы профиля задачи; настройки MCP из других мест не подхватываются.
+		args = append(args, "--mcp-config", string(req.MCPConfig), "--strict-mcp-config")
+	}
 	prompt := BuildPrompt(req)
 	if req.Raw {
 		prompt = req.Prompt
@@ -70,7 +93,7 @@ func (c *ClaudeCode) Run(ctx context.Context, req Request) (Result, error) {
 	var lines []string
 	res, err := c.R.Run(ctx, runner.Command{
 		Exe: "docker", Args: args, Timeout: req.Timeout, Stdin: prompt,
-		Env:    []string{"CLAUDE_CODE_OAUTH_TOKEN=" + token},
+		Env:    env,
 		Stdout: func(l string) { lines = append(lines, l) },
 	})
 	if err != nil {

@@ -1,0 +1,29 @@
+# Реестр MCP AiCrew (ТЗ п. 11, docs/stage7-5-manager-skills-mcp.md, раздел 3).
+# Агент получает только серверы своего MCP-профиля. Новые серверы — только через коммит,
+# одобренный владельцем; секреты сюда не пишутся (выдача секретов — этап 7.6).
+
+servers:
+  roblox_studio:
+    # https://create.roblox.com/docs/studio/mcp — Assistant → Manage MCP Servers → Enable Studio as MCP server.
+    description: Встроенный MCP-сервер Roblox Studio. Только окружение windows_user (Studio пользователя ai_worker).
+    type: stdio
+    command: cmd.exe
+    args: ["/c", "%LOCALAPPDATA%\\Roblox\\mcp.bat"]
+    # Только работа с местом и проверка. Генерация и загрузка ассетов, магазин и http_get не выдаются.
+    tools: [script_read, multi_edit, script_search, script_grep, search_game_tree, inspect_instance, execute_luau,
+      get_studio_state, start_stop_play, get_console_output, screen_capture, character_navigation,
+      user_keyboard_input, user_mouse_input, list_roblox_studios]
+    scopes:
+      network: false
+      paths: []
+
+profiles:
+  default:
+    description: Без MCP. Файлы worktree доступны встроенными инструментами исполнителя.
+  web:
+    description: Чтение веб-страниц и документации (WebFetch, при необходимости через Jina Reader r.jina.ai). Для задач, которым нужна свежая документация.
+    builtin_tools: [WebFetch]
+  roblox:
+    description: Работа с открытой сессией Roblox Studio — дерево объектов, скрипты, запуск игры. Только для задач Roblox в окружении windows_user.
+    servers: [roblox_studio]
+    environments: [windows_user]

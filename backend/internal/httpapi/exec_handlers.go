@@ -50,6 +50,10 @@ func (s *Server) handleExecRegisterHost(w http.ResponseWriter, r *http.Request, 
 		Capabilities []string          `json:"capabilities"`
 		Environments []string          `json:"environments"`
 		Workers      []exec.WorkerSpec `json:"workers"`
+		// 7.5: реестры хоста — по ним проверяются планы Manager'а.
+		Skills      []string `json:"skills"`
+		MCPProfiles []string `json:"mcp_profiles"`
+		Executors   []string `json:"executors"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -58,6 +62,13 @@ func (s *Server) handleExecRegisterHost(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		s.execError(w, r, err)
 		return
+	}
+	// Реестры присылает только служба (aicrew-host run); add-repo их не трогает.
+	if req.Skills != nil || req.MCPProfiles != nil || req.Executors != nil {
+		if err := s.exec.SetHostRegistries(r.Context(), execIdentity(id), h.ID, req.Skills, req.MCPProfiles, req.Executors); err != nil {
+			s.execError(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, h)
 }
@@ -295,4 +306,100 @@ func (s *Server) handleExecKeepWorktrees(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"task_ids": ids})
+}
+
+// ── планы Manager'а (этап 7.5) ──
+
+func (s *Server) handleExecCreatePlan(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	var req exec.NewPlan
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	planID, err := s.exec.CreatePlan(r.Context(), id.UserID, req)
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": planID})
+}
+
+func (s *Server) handleExecListPlans(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	plans, err := s.exec.ListPlans(r.Context(), id.UserID)
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plans": plans})
+}
+
+func (s *Server) handleExecApprovePlan(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	planID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.exec.ApprovePlan(r.Context(), id.UserID, planID); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleExecRejectPlan(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	planID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if r.ContentLength > 0 && !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.exec.RejectPlan(r.Context(), id.UserID, planID, req.Reason); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleExecPlanResult — хост сдаёт предложение Manager'а; сервер проверяет и применяет.
+func (s *Server) handleExecPlanResult(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	planID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		WorkerID uuid.UUID      `json:"worker_id"`
+		Attempt  int            `json:"attempt"`
+		Proposal *exec.Proposal `json:"proposal"`
+		Failure  string         `json:"failure"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	status, reason, err := s.exec.SubmitPlan(r.Context(), execIdentity(id), planID, req.WorkerID, req.Attempt, req.Proposal, req.Failure)
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": status, "error": reason})
+}
+
+func (s *Server) handleExecSkillPolicy(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	repoID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Required  []string `json:"required"`
+		Forbidden []string `json:"forbidden"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.exec.SetSkillPolicy(r.Context(), id.UserID, repoID, req.Required, req.Forbidden); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

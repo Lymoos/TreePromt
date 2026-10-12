@@ -231,6 +231,34 @@ type NewTask struct {
 	MaxAttempts          int         `json:"max_attempts"`
 	// ReviewLevel — logic (по умолчанию) или tech_lead: ещё и ревью Tech Lead (решение 7.4/4).
 	ReviewLevel string `json:"review_level"`
+	// 7.5: что подключить исполнителю и кто исполняет.
+	RequiredSkills []string `json:"required_skills"`
+	MCPProfile     string   `json:"mcp_profile"`
+	TouchesUI      bool     `json:"touches_ui"`
+	Executor       string   `json:"executor"` // claude | junior
+
+	planID *uuid.UUID
+}
+
+func (in *NewTask) defaults() {
+	if in.ExecutionMode == "" {
+		in.ExecutionMode = "manual"
+	}
+	if in.ExecutionEnv == "" {
+		in.ExecutionEnv = "container"
+	}
+	if in.MaxAttempts <= 0 {
+		in.MaxAttempts = 3
+	}
+	if in.ReviewLevel == "" {
+		in.ReviewLevel = "logic"
+	}
+	if in.MCPProfile == "" {
+		in.MCPProfile = "default"
+	}
+	if in.Executor == "" {
+		in.Executor = "claude"
+	}
 }
 
 // finalTaskText — снимок итоговой задачи: роль + структура, если она есть, иначе исходник.
@@ -260,18 +288,6 @@ func finalTaskText(ctx context.Context, tx pgx.Tx, nodeID uuid.UUID) (title, tex
 }
 
 func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) (uuid.UUID, error) {
-	if in.ExecutionMode == "" {
-		in.ExecutionMode = "manual"
-	}
-	if in.ExecutionEnv == "" {
-		in.ExecutionEnv = "container"
-	}
-	if in.MaxAttempts <= 0 {
-		in.MaxAttempts = 3
-	}
-	if in.ReviewLevel == "" {
-		in.ReviewLevel = "logic"
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return uuid.Nil, err
@@ -285,6 +301,20 @@ func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) 
 	if err := requireProjectWrite(ctx, tx, userID, repoProject); err != nil {
 		return uuid.Nil, err
 	}
+	id, err := insertTask(ctx, tx, userID, repoProject, in)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	s.notify(userID)
+	return id, nil
+}
+
+// insertTask создаёт задачу в открытой транзакции (права уже проверены).
+func insertTask(ctx context.Context, tx pgx.Tx, userID, repoProject uuid.UUID, in NewTask) (uuid.UUID, error) {
+	in.defaults()
 	title, prompt := strings.TrimSpace(in.Title), strings.TrimSpace(in.Prompt)
 	if in.NodeID != nil {
 		nodeTitle, text, nodeProject, err := finalTaskText(ctx, tx, *in.NodeID)
@@ -305,12 +335,14 @@ func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) 
 		return uuid.Nil, ErrInvalid
 	}
 	caps, _ := json.Marshal(nonNil(in.RequiredCapabilities))
+	skills, _ := json.Marshal(nonNil(in.RequiredSkills))
 	id := uuid.Must(uuid.NewV7())
 	if _, err := tx.Exec(ctx, `INSERT INTO exec.tasks (id, project_id, node_id, repository_id, created_by, title, prompt, status,
-			execution_mode, execution_env, required_capabilities, max_attempts, review_level)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'QUEUED', $8, $9, $10, $11, $12)`,
+			execution_mode, execution_env, required_capabilities, max_attempts, review_level,
+			plan_id, required_skills, mcp_profile, touches_ui, executor)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'QUEUED', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		id, repoProject, in.NodeID, in.RepositoryID, userID, title, prompt, in.ExecutionMode, in.ExecutionEnv, caps, in.MaxAttempts,
-		in.ReviewLevel); err != nil {
+		in.ReviewLevel, in.planID, skills, in.MCPProfile, in.TouchesUI, in.Executor); err != nil {
 		if strings.Contains(err.Error(), "check constraint") {
 			return uuid.Nil, ErrInvalid
 		}
@@ -322,13 +354,13 @@ func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) 
 			return uuid.Nil, err
 		}
 	}
-	if err := event(ctx, tx, id, nil, StatusQueued, "user:"+userID.String(), "created", nil); err != nil {
+	reason := "created"
+	if in.planID != nil {
+		reason = "created from plan " + in.planID.String()
+	}
+	if err := event(ctx, tx, id, nil, StatusQueued, "user:"+userID.String(), reason, nil); err != nil {
 		return uuid.Nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return uuid.Nil, err
-	}
-	s.notify(userID)
 	return id, nil
 }
 
@@ -338,6 +370,10 @@ type ClaimedTask struct {
 	Kind             string         `json:"kind"`
 	ID               uuid.UUID      `json:"id"`
 	ReviewLevel      string         `json:"review_level"`
+	RequiredSkills   []string       `json:"required_skills"`
+	MCPProfile       string         `json:"mcp_profile"`
+	TouchesUI        bool           `json:"touches_ui"`
+	Executor         string         `json:"executor"`
 	Attempt          int            `json:"attempt"`
 	Title            string         `json:"title"`
 	Prompt           string         `json:"prompt"`
@@ -354,6 +390,7 @@ const (
 	KindExecute  = "execute"
 	KindMerge    = "merge"
 	KindRollback = "rollback"
+	KindPlan     = "plan"
 )
 
 type AttemptFacts struct {
@@ -393,9 +430,21 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		s.notify(id.UserID)
 		return job, nil
 	}
+	// Затем планы Manager'а: декомпозиция дешёвая, а её задачи встают в ту же очередь.
+	plan, err := s.claimPlan(ctx, tx, hostID, workerID, now)
+	if err != nil {
+		return nil, err
+	}
+	if plan != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		s.notify(id.UserID)
+		return plan, nil
+	}
 	t := ClaimedTask{Kind: KindExecute}
 	err = tx.QueryRow(ctx, `SELECT t.id, t.attempt, t.title, t.prompt, t.execution_env, t.review_level, t.agent_runtime_sec,
-			t.verification_runtime_sec, r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
+			t.verification_runtime_sec, t.required_skills, t.mcp_profile, t.touches_ui, t.executor, r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
 		FROM exec.tasks t
 		JOIN exec.repositories r ON r.id = t.repository_id
 		JOIN exec.hosts h ON h.id = r.host_id
@@ -403,6 +452,7 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		  AND (t.retry_after IS NULL OR t.retry_after <= $2)
 		  AND h.environments @> to_jsonb(t.execution_env)
 		  AND h.capabilities @> t.required_capabilities
+		  AND h.executors @> to_jsonb(t.executor)
 		  AND NOT EXISTS (
 			SELECT 1 FROM exec.task_dependencies d JOIN exec.tasks dt ON dt.id = d.depends_on_task_id
 			WHERE d.task_id = t.id AND dt.status <> 'DONE')
@@ -410,6 +460,7 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		LIMIT 1
 		FOR UPDATE OF t SKIP LOCKED`, hostID, now).
 		Scan(&t.ID, &t.Attempt, &t.Title, &t.Prompt, &t.ExecutionEnv, &t.ReviewLevel, &t.AgentRuntimeSec, &t.VerifyRuntimeSec,
+			&t.RequiredSkills, &t.MCPProfile, &t.TouchesUI, &t.Executor,
 			&t.Repository.ID, &t.Repository.ProjectID, &t.Repository.HostID, &t.Repository.Name, &t.Repository.LocalPath,
 			&t.Repository.DefaultBranch, &t.Repository.IntegrationBranch, &t.Repository.VerificationProfile)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -815,6 +866,15 @@ func (s *Service) fail(ctx context.Context, tx pgx.Tx, taskID uuid.UUID, t lease
 
 // ReapExpired — сборщик: задачи с истёкшим lease (воркер умер, ПК выключили).
 func (s *Service) ReapExpired(ctx context.Context) (int, error) {
+	plans, err := s.reapPlans(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n, err := s.reapTasks(ctx)
+	return n + plans, err
+}
+
+func (s *Service) reapTasks(ctx context.Context) (int, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id FROM exec.tasks WHERE lease_expires_at < $1 AND status = ANY($2)`,
 		s.now(), leasedStatuses)
 	if err != nil {

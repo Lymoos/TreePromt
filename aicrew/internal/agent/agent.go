@@ -29,7 +29,20 @@ type Request struct {
 	ReadOnly bool
 	// Name — имя контейнера; пусто — aicrew-task-<id>-<attempt>.
 	Name string
+	// Mounts — дополнительные каталоги (скиллы — только для чтения).
+	Mounts []Mount
+	// MCPConfig — JSON с серверами MCP-профиля задачи; ExtraTools — их инструменты.
+	MCPConfig  []byte
+	ExtraTools []string
 }
+
+type Mount struct {
+	Host, Container string
+	ReadOnly        bool
+}
+
+// SkillsMount — куда Claude Code смотрит за личными скиллами внутри контейнера.
+const SkillsMount = "/home/agent/.claude/skills"
 
 type Usage struct {
 	InputTokens  int64   `json:"input_tokens"`

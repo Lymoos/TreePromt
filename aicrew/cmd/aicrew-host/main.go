@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -34,9 +35,12 @@ import (
 	"prompttree/aicrew/internal/config"
 	"prompttree/aicrew/internal/gitx"
 	"prompttree/aicrew/internal/host"
+	"prompttree/aicrew/internal/manager"
+	"prompttree/aicrew/internal/mcp"
 	"prompttree/aicrew/internal/review"
 	"prompttree/aicrew/internal/runner"
 	"prompttree/aicrew/internal/secrets"
+	"prompttree/aicrew/internal/skills"
 	"prompttree/aicrew/internal/verify"
 )
 
@@ -315,7 +319,6 @@ func runHost(ctx context.Context, e *env) error {
 	if err != nil {
 		return err
 	}
-	workerID := h.Workers["claude_code/"+e.cfg.ClaudeModel]
 	run := runner.New("git", "docker")
 	g := gitx.Git{R: run}
 	claude := &agent.ClaudeCode{R: run, Image: e.cfg.AgentImage, Model: e.cfg.ClaudeModel,
@@ -323,6 +326,43 @@ func runHost(ctx context.Context, e *env) error {
 			t, err := e.sec.Get(secrets.ClaudeToken)
 			return cleanToken(t), err
 		}}
+
+	// 7.5: реестры скиллов и MCP, Junior на Ollama, Manager.
+	skillReg, err := skills.Load(findNearExe(e.cfg.SkillsDir, "skills"))
+	if err != nil {
+		return err
+	}
+	mcpReg, err := mcp.Load(findNearExe(e.cfg.MCPRegistry, filepath.Join("mcp", "registry.yaml")))
+	if err != nil {
+		return err
+	}
+	executors := []manager.Option{{Name: "claude", Description: "Claude Code (Sonnet): any coding task, required for complex or architectural work"}}
+	var junior agent.Provider
+	if ollamaHas(ctx, e.cfg.OllamaURL, e.cfg.JuniorModel) {
+		junior = &agent.ClaudeCode{R: run, Image: e.cfg.AgentImage, Model: e.cfg.JuniorModel, LocalBaseURL: e.cfg.OllamaURLContainer}
+		executors = append(executors, manager.Option{Name: "junior", Description: "local small model (" + e.cfg.JuniorModel +
+			"): only mechanical work with an exact spec — renames, simple tests, docs, small edits"})
+	}
+	reg := api.Registries{Skills: skillReg.Names(), MCPProfiles: mcpReg.ProfileNames()}
+	for _, x := range executors {
+		reg.Executors = append(reg.Executors, x.Name)
+	}
+	h, err = e.client.RegisterHost(ctx, e.cfg.HostName, runtime.GOOS, e.cfg.Capabilities, e.cfg.Environments,
+		[]api.WorkerSpec{{Kind: "claude_code", Model: e.cfg.ClaudeModel}}, reg)
+	if err != nil {
+		return err
+	}
+	workerID := h.Workers["claude_code/"+e.cfg.ClaudeModel]
+	skillOpts := map[string]string{}
+	for _, sk := range skillReg.All() {
+		skillOpts[sk.Name] = sk.Description
+	}
+	mcpOpts := map[string]string{}
+	for name, p := range mcpReg.Profiles {
+		if len(p.Environments) == 0 || containsAny(p.Environments, e.cfg.Environments) {
+			mcpOpts[name] = p.Description
+		}
+	}
 	hst := &host.Host{
 		API: e.client, Git: g, WorkerID: workerID, Log: log,
 		PollEvery: 10 * time.Second, HeartbeatEvery: 30 * time.Second,
@@ -334,6 +374,12 @@ func runHost(ctx context.Context, e *env) error {
 				Fallback: review.Claude{Agent: claude, Model: e.cfg.ReviewModel}},
 			techLead: review.Claude{Agent: claude, Model: e.cfg.TechLeadModel},
 		},
+		Junior:  junior,
+		Skills:  skillReg,
+		MCP:     mcpReg,
+		Planner: manager.Manager{Agent: claude, Model: e.cfg.ManagerModel},
+		Catalog: manager.Catalog{Capabilities: e.cfg.Capabilities, Environments: e.cfg.Environments,
+			Executors: executors, Skills: manager.Options(skillOpts), MCPProfiles: manager.Options(mcpOpts)},
 	}
 
 	// При старте — уборка осиротевших worktree (ТЗ п. 8.2).
@@ -351,7 +397,8 @@ func runHost(ctx context.Context, e *env) error {
 	if err != nil {
 		return err
 	}
-	log.Info("aicrew-host started", "host", h.ID, "worker", workerID, "repositories", len(paths), "orphans_removed", len(removed))
+	log.Info("aicrew-host started", "host", h.ID, "worker", workerID, "repositories", len(paths), "orphans_removed", len(removed),
+		"skills", len(reg.Skills), "mcp_profiles", reg.MCPProfiles, "executors", reg.Executors)
 	return hst.Run(ctx)
 }
 
@@ -492,4 +539,59 @@ func (r reviewers) Review(ctx context.Context, role string, t *api.Task, workdir
 		return r.techLead.Review(ctx, role, t, workdir, f)
 	}
 	return r.logic.Review(ctx, role, t, workdir, f)
+}
+
+// findNearExe — путь из настроек или каталог рядом с программой (…/bin/aicrew-host.exe → …/aicrew/<rel>).
+func findNearExe(configured, rel string) string {
+	if configured != "" {
+		return configured
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(exe)
+	for _, cand := range []string{filepath.Join(dir, rel), filepath.Join(dir, "..", rel), filepath.Join(dir, "..", "..", "aicrew", rel)} {
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	return ""
+}
+
+// ollamaHas — Ollama отвечает и модель скачана.
+func ollamaHas(ctx context.Context, base, model string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/api/tags", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var tags struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&tags) != nil {
+		return false
+	}
+	for _, m := range tags.Models {
+		if m.Name == model {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(xs, ys []string) bool {
+	for _, x := range xs {
+		for _, y := range ys {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
 }

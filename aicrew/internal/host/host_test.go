@@ -32,6 +32,8 @@ type fakeServer struct {
 	cancel      bool
 	lostLease   bool
 	keep        map[string]bool
+	plan        *api.Proposal
+	planFailure string
 }
 
 func (s *fakeServer) Claim(context.Context, string) (*api.Task, error) {
@@ -63,6 +65,16 @@ func (s *fakeServer) Transition(_ context.Context, _, _ string, _ int, to string
 }
 
 func (s *fakeServer) KeepWorktrees(context.Context) (map[string]bool, error) { return s.keep, nil }
+
+func (s *fakeServer) SubmitPlan(_ context.Context, _, _ string, _ int, p *api.Proposal, failure string) (string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.plan, s.planFailure = p, failure
+	if failure != "" {
+		return "FAILED", failure, nil
+	}
+	return "AWAITING_APPROVAL", "", nil
+}
 
 func (s *fakeServer) got() []string {
 	s.mu.Lock()

@@ -20,6 +20,14 @@ type Config struct {
 	// Ревьюеры (7.4): Logic QA, пока у сервера нет Gemini, и Tech Lead.
 	ReviewModel   string `json:"review_model"`
 	TechLeadModel string `json:"tech_lead_model"`
+	// 7.5: Manager, реестры, локальные модели (Ollama; модели лежат на D:, настройка самой Ollama).
+	ManagerModel       string `json:"manager_model"`
+	SkillsDir          string `json:"skills_dir"`           // каталог скиллов; пусто — рядом с программой
+	MCPRegistry        string `json:"mcp_registry"`         // реестр MCP; пусто — рядом с программой
+	OllamaURL          string `json:"ollama_url"`           // для хоста
+	OllamaURLContainer string `json:"ollama_url_container"` // для контейнера исполнителя
+	JuniorModel        string `json:"junior_model"`
+	VisionModel        string `json:"vision_model"`
 	// Сколько задач одновременно (решение 7.1: одна).
 	Concurrency int `json:"concurrency"`
 }
@@ -43,14 +51,19 @@ func Path() (string, error) {
 func Defaults() Config {
 	host, _ := os.Hostname()
 	return Config{
-		HostName:      host,
-		Capabilities:  []string{"flutter", "go", "web"},
-		Environments:  []string{"container"},
-		AgentImage:    "aicrew-agent-flutter:local",
-		ClaudeModel:   "sonnet",
-		ReviewModel:   "haiku",
-		TechLeadModel: "sonnet",
-		Concurrency:   1,
+		HostName:           host,
+		Capabilities:       []string{"flutter", "go", "web"},
+		Environments:       []string{"container"},
+		AgentImage:         "aicrew-agent-flutter:local",
+		ClaudeModel:        "sonnet",
+		ReviewModel:        "haiku",
+		TechLeadModel:      "sonnet",
+		ManagerModel:       "haiku",
+		OllamaURL:          "http://127.0.0.1:11434",
+		OllamaURLContainer: "http://host.docker.internal:11434",
+		JuniorModel:        "qwen2.5-coder:7b",
+		VisionModel:        "qwen2.5vl:7b",
+		Concurrency:        1,
 	}
 }
 
