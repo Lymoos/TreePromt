@@ -10,7 +10,7 @@ ENV="$DIR/.env"
 
 IFS= read -r KEY || true
 KEY=$(printf '%s' "$KEY" | tr -d '\r\n\t ')
-[[ "$KEY" =~ ^[A-Za-z0-9_-]{20,100}$ ]] || { echo "Это не похоже на ключ Google AI Studio." >&2; exit 2; }
+[[ "$KEY" =~ ^[A-Za-z0-9._-]{20,200}$ ]] || { echo "Это не похоже на ключ Google AI Studio." >&2; exit 2; }
 
 # Проверка у Google до сохранения: ключ в заголовке, не в адресе.
 code=$(curl -s -o /tmp/gemini-check.json -w '%{http_code}' -m 20 -H "x-goog-api-key: $KEY" \
