@@ -134,7 +134,8 @@ void main() {
   testWidgets('trash', (tester) async {
     await phone(tester, dark: true);
     final store = memoryStore();
-    final t = TreeService(store);
+    // Время удаления видно на снимке — часы фиксированы, иначе снимок меняется каждую минуту.
+    final t = TreeService(store, clock: () => DateTime(2026, 10, 12, 14, 30));
     final p = await t.createProject('PromptTree');
     for (final name in ['Старая идея', 'Черновик про иконку']) {
       await t.delete(await t.createNode(projectId: p, kind: NodeKind.rawNote, name: name));
