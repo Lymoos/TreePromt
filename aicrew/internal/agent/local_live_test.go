@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -21,10 +23,12 @@ func TestLocalLive(t *testing.T) {
 	if model == "" {
 		model = "qwen3-coder:30b"
 	}
-	l := &Local{R: runner.New("docker"), Image: "aicrew-agent-flutter:local", BaseURL: "http://127.0.0.1:11434", Model: model, NumCtx: 16384}
+	l := &Local{R: runner.New("docker"), Image: "aicrew-agent-flutter:local", BaseURL: "http://127.0.0.1:11434", Model: model, NumCtx: 16384,
+		Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	maxTurns, _ := strconv.Atoi(os.Getenv("AICREW_LIVE_TURNS"))
 	start := time.Now()
 	res, err := l.Run(context.Background(), Request{TaskID: "live", Attempt: 1, Workdir: repo, Prompt: os.Getenv("AICREW_LIVE_PROMPT"),
-		Timeout: 40 * time.Minute, Checks: []string{"flutter analyze", "flutter test"}})
+		Timeout: 40 * time.Minute, MaxTurns: maxTurns, Checks: []string{"flutter analyze", "flutter test"}})
 	t.Logf("%s, turns %d, tokens in %d out %d\nsummary: %s", time.Since(start).Round(time.Second), res.Usage.Turns,
 		res.Usage.InputTokens, res.Usage.OutputTokens, res.Summary)
 	if err != nil {

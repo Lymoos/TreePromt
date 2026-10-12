@@ -276,3 +276,26 @@ func TestRAMNeedCountsWhatFitsOnTheGPU(t *testing.T) {
 		t.Fatal("without a GPU everything goes to RAM")
 	}
 }
+
+func TestLocalAgentStopsLoopingEarly(t *testing.T) {
+	var replies []string
+	for i := 0; i < 10; i++ {
+		replies = append(replies, call("list_files", map[string]any{"path": "lib"}), call("read_file", map[string]any{"path": "main.dart"}))
+	}
+	l, fo, _, dir := newLocal(t, replies...)
+	_, err := l.Run(context.Background(), Request{TaskID: "t", Attempt: 1, Workdir: dir, Prompt: "p"})
+	f, ok := err.(*Failure)
+	if !ok || f.Code != "looping" {
+		t.Fatalf("%v", err)
+	}
+	if n := len(fo.requests); n > 10 {
+		t.Fatalf("must stop after a few repeats, made %d model calls", n)
+	}
+	outs := fo.lastToolOutputs()
+	if !strings.Contains(outs[len(outs)-1], "Do not repeat it") {
+		t.Fatalf("the model must be told first: %q", outs[len(outs)-1])
+	}
+	if fo.requests[0]["options"].(map[string]any)["num_predict"] != float64(4096) {
+		t.Fatal("answer length must be capped")
+	}
+}

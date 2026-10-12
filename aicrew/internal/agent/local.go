@@ -86,6 +86,7 @@ func (l *Local) Run(ctx context.Context, req Request) (Result, error) {
 	msgs := []chatMessage{{Role: "system", Content: s.systemPrompt()}, {Role: "user", Content: s.taskPrompt()}}
 	var usage Usage
 	nudges := 0
+	seen := map[string]int{} // одинаковые вызовы: маленькие модели ходят по кругу (читают один файл снова и снова)
 	for turn := 1; turn <= maxTurns; turn++ {
 		usage.Turns = turn
 		reply, err := l.chat(ctx, trimHistory(msgs, l.NumCtx), s.tools())
@@ -121,7 +122,21 @@ func (l *Local) Run(ctx context.Context, req Request) (Result, error) {
 				return Result{Summary: argString(c.Function.Arguments, "summary"), Usage: usage}, nil
 			}
 			if l.Log != nil {
-				l.Log.Info("junior step", "task", req.TaskID, "turn", turn, "tool", c.Function.Name, "args", brief(c.Function.Arguments))
+				l.Log.Info("junior step", "task", req.TaskID, "turn", turn, "tool", c.Function.Name, "args", brief(c.Function.Arguments),
+					"prompt_tokens", reply.PromptEvalCount, "said", firstRunes(msg.Content, 80))
+			}
+			key := c.Function.Name + " " + brief(c.Function.Arguments)
+			if !s.changed || c.Function.Name != "run" { // проверки после правок повторять можно
+				seen[key]++
+			}
+			switch n := seen[key]; {
+			case n >= 5:
+				return Result{Usage: usage}, &Failure{Class: "AGENT_ERROR", Code: "looping",
+					Message: fmt.Sprintf("the model repeats the same call (%s) and makes no progress", key)}
+			case n >= 3:
+				msgs = append(msgs, chatMessage{Role: "tool", ToolName: c.Function.Name, Content: "You already made this exact call " +
+					"and have its result above. Do not repeat it: make the change now with edit_file or write_file, or call finish."})
+				continue
 			}
 			out := s.call(ctx, c.Function.Name, c.Function.Arguments)
 			msgs = append(msgs, chatMessage{Role: "tool", ToolName: c.Function.Name, Content: out})
@@ -306,7 +321,8 @@ type chatReply struct {
 }
 
 func (l *Local) chat(ctx context.Context, msgs []chatMessage, tools []map[string]any) (chatReply, error) {
-	opts := map[string]any{"temperature": 0.2}
+	// num_predict: без предела маленькая модель иногда генерирует без остановки (12.10.2026 — 15 минут на один ход).
+	opts := map[string]any{"temperature": 0.2, "num_predict": 4096}
 	if l.NumCtx > 0 {
 		opts["num_ctx"] = l.NumCtx
 	}
@@ -347,10 +363,19 @@ func trimHistory(msgs []chatMessage, numCtx int) []chatMessage {
 	for i := 2; i < len(out)-6 && total > budget; i++ {
 		if out[i].Role == "tool" && len(out[i].Content) > 200 {
 			total -= len(out[i].Content) - 60
-			out[i].Content = out[i].Content[:60] + " …[trimmed: old tool output]"
+			out[i].Content = firstRunes(out[i].Content, 60) + " …[trimmed: old tool output]"
 		}
 	}
 	return out
+}
+
+// firstRunes — начало строки не длиннее n символов (не режет UTF-8 посреди буквы).
+func firstRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 // ── ремонт вызовов, присланных текстом ──
