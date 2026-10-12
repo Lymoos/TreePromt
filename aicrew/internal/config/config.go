@@ -27,8 +27,7 @@ type Config struct {
 	OllamaURL          string `json:"ollama_url"`           // для хоста
 	OllamaURLContainer string `json:"ollama_url_container"` // для контейнера исполнителя
 	JuniorModel        string `json:"junior_model"`
-	// Окно контекста Junior: системный промпт Claude Code ~18k токенов, а Ollama по умолчанию даёт 4k.
-	// Служба создаёт в Ollama вариант модели с этим num_ctx (см. ensureContextModel).
+	// Окно контекста Junior (options.num_ctx в запросах к Ollama; по умолчанию Ollama даёт 4k).
 	JuniorContext int `json:"junior_context"`
 	// Окружение windows_user (7.5b): пользователь Windows без прав администратора и его рабочая папка.
 	WorkerUser   string            `json:"worker_user"`   // ai_worker; пусто — окружение выключено
