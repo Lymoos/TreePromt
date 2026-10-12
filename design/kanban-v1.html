@@ -1,0 +1,253 @@
+<title>AiCrew канбан</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Канбан AiCrew в системе PromptTree: ч/б и серые, состояние — формой маркера, не цветом. */
+:root {
+  --bg: #ffffff; --fg: #111111; --muted: #6e6e6e; --faint: #a8a8a8;
+  --line: #e7e7e7; --line-strong: #c9c9c9; --hover: #f3f3f3; --sel: #ebebeb; --panel: #fafafa;
+  --inv-bg: #111111; --inv-fg: #f2f2f2;
+  --font-ui: "Onest", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e0e0e; --fg: #ececec; --muted: #9a9a9a; --faint: #5c5c5c;
+    --line: #232323; --line-strong: #3a3a3a; --hover: #1a1a1a; --sel: #242424; --panel: #131313;
+    --inv-bg: #ececec; --inv-fg: #0e0e0e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e0e0e; --fg: #ececec; --muted: #9a9a9a; --faint: #5c5c5c;
+  --line: #232323; --line-strong: #3a3a3a; --hover: #1a1a1a; --sel: #242424; --panel: #131313;
+  --inv-bg: #ececec; --inv-fg: #0e0e0e; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 48px; display: grid; gap: 18px; }
+.mono { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+h1 { font-size: 20px; font-weight: 600; margin: 0; text-wrap: balance; }
+h2 { font-size: 13px; font-weight: 600; margin: 0; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+
+/* шапка макета: выбор варианта */
+.proto { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--panel); }
+.proto p { margin: 0; color: var(--muted); max-width: 70ch; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 6px 12px; }
+.seg button[aria-pressed="true"] { background: var(--inv-bg); color: var(--inv-fg); }
+
+/* верх страницы канбана */
+.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.top .title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.crew { display: flex; flex-wrap: wrap; gap: 8px; }
+.agent { display: inline-flex; align-items: center; gap: 7px; padding: 4px 9px 4px 4px; border: 1px solid var(--line); border-radius: 999px; }
+.ava { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 600 10px/1 var(--font-mono); background: var(--sel); }
+.ava.busy { background: var(--inv-bg); color: var(--inv-fg); }
+.agent .st { font-size: 12px; color: var(--muted); }
+.btn { border: 1px solid var(--line-strong); background: var(--bg); border-radius: 7px; padding: 6px 12px; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--inv-bg); color: var(--inv-fg); border-color: var(--inv-bg); }
+.btn.ghost { border-color: transparent; }
+
+/* инцидент — инвертированная полоса: в ч/б системе это самое громкое средство */
+.incident { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 12px 14px; border-radius: 8px; background: var(--inv-bg); color: var(--inv-fg); }
+.incident b { font-weight: 600; }
+.incident .btn { background: transparent; color: var(--inv-fg); border-color: currentColor; }
+.incident .btn.primary { background: var(--inv-fg); color: var(--inv-bg); }
+
+/* маркеры состояния (как в дереве PromptTree: форма несёт смысл) */
+.mk { width: 10px; height: 10px; flex: none; display: inline-block; }
+.mk.queued { border: 1.5px solid var(--fg); border-radius: 50%; }
+.mk.work { border: 1.5px solid var(--fg); border-radius: 50%; background: conic-gradient(var(--fg) 0 50%, transparent 0); }
+.mk.check { border: 1.5px solid var(--fg); transform: rotate(45deg) scale(.85); }
+.mk.wait { background: var(--fg); transform: rotate(45deg) scale(.85); }
+.mk.done { background: var(--fg); border-radius: 2px; }
+.mk.fail { border: 1.5px solid var(--fg); border-radius: 2px; background: linear-gradient(45deg, transparent 45%, var(--fg) 45% 55%, transparent 55%); }
+
+/* карточка задачи */
+.card { display: grid; gap: 8px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); min-width: 0; }
+.card:hover { border-color: var(--line-strong); }
+.card.need { border-color: var(--fg); }
+.card .head { display: flex; gap: 8px; align-items: flex-start; }
+.card .name { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.card .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { font: 11px/1 var(--font-mono); padding: 4px 6px; border-radius: 4px; background: var(--sel); color: var(--fg); }
+.chip.out { background: transparent; border: 1px solid var(--line-strong); color: var(--muted); }
+.why { font-size: 13px; color: var(--muted); border-left: 2px solid var(--line-strong); padding-left: 8px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.reject { display: grid; gap: 6px; }
+.reject textarea { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; padding: 7px 8px; min-height: 64px; resize: vertical; width: 100%; }
+.plan-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.plan-list label { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.plan-list .dep { color: var(--faint); }
+
+/* вариант A: доска */
+.board { display: grid; grid-template-columns: repeat(6, minmax(220px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 6px; }
+.col { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.col h2 { display: flex; align-items: center; gap: 7px; padding: 0 2px 4px; border-bottom: 1px solid var(--line); }
+.col h2 .n { margin-left: auto; font-family: var(--font-mono); letter-spacing: 0; }
+.board-scroll { overflow-x: auto; }
+
+/* вариант B: список */
+.groups { display: grid; gap: 18px; }
+.group { display: grid; gap: 8px; }
+.group > h2 { display: flex; align-items: center; gap: 7px; }
+.rows { display: grid; gap: 6px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--inv-bg); color: var(--inv-fg); padding: 8px 14px; border-radius: 8px; font-size: 13px; }
+@media (max-width: 720px) { .board { grid-template-columns: repeat(6, minmax(240px, 82vw)); } }
+@media (prefers-reduced-motion: no-preference) { .card { transition: border-color .15s; } }
+</style>
+
+<div class="wrap">
+  <div class="proto" role="note">
+    <p><b>Макет на согласование.</b> Данные — с полигона 12.10. Кнопки работают внутри макета, на сервер ничего не уходит. Выберите вариант раскладки:</p>
+    <div class="seg" role="group" aria-label="Вариант">
+      <button id="vA" aria-pressed="true">A · Доска</button>
+      <button id="vB" aria-pressed="false">B · Список</button>
+    </div>
+  </div>
+
+  <div class="top">
+    <div class="title"><h1>AiCrew · Полигон</h1><span class="mono">todo-sandbox · integration 4bb076c</span></div>
+    <div class="crew" aria-label="Исполнители">
+      <span class="agent"><span class="ava busy">CC</span>Claude · Sonnet<span class="st">· задача</span></span>
+      <span class="agent"><span class="ava">QA</span>Haiku<span class="st">· свободен</span></span>
+      <span class="agent"><span class="ava">QW</span>Qwen · Junior<span class="st">· свободен</span></span>
+      <span class="agent"><span class="ava">VL</span>Qwen-VL<span class="st">· свободен</span></span>
+      <button class="btn" id="stopAll">Остановить всё</button>
+    </div>
+  </div>
+
+  <div class="incident" id="incident" hidden>
+    <div><b>AiCrew на паузе</b> · вручную: «Остановить всё». Задачи не берутся, слияния не идут, ночная смена стоит.</div>
+    <div class="actions"><button class="btn primary" id="resume">Возобновить</button></div>
+  </div>
+
+  <div class="legend" aria-label="Обозначения">
+    <span><i class="mk queued"></i>в очереди</span><span><i class="mk work"></i>в работе</span><span><i class="mk check"></i>проверка</span>
+    <span><i class="mk wait"></i>ждёт решения</span><span><i class="mk done"></i>слито</span><span><i class="mk fail"></i>ошибка</span>
+  </div>
+
+  <div id="view"></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const COLS = [
+  { id: "queued", title: "Очередь", mk: "queued" },
+  { id: "work", title: "В работе", mk: "work" },
+  { id: "check", title: "Проверка", mk: "check" },
+  { id: "wait", title: "Ждёт решения", mk: "wait" },
+  { id: "done", title: "Слито", mk: "done" },
+  { id: "fail", title: "Ошибки", mk: "fail" },
+];
+let tasks = [
+  { id: 1, col: "wait", kind: "plan", name: "План: экспорт списка в файл", meta: "Manager · Haiku · 3 задачи",
+    plan: [["Сериализация списка в JSON", []], ["Кнопка «Экспорт» в меню", [0]], ["Тесты экспорта", [0, 1]]] },
+  { id: 2, col: "wait", kind: "merge", name: "Заголовок «Дела на сегодня»", meta: "попытка 2 · Claude · ревью Haiku: одобрено",
+    chips: ["dart-clean-code"], approval: ["architecture.yaml"] },
+  { id: 3, col: "work", name: "Поиск по задачам", meta: "попытка 1 · Claude · 2 мин", chips: ["flutter-widget-tests"] },
+  { id: 4, col: "check", name: "Цветная метка приоритета", meta: "Vision QA · Qwen-VL · снимки 412 и 1280", chips: ["touches_ui"] },
+  { id: 5, col: "queued", name: "Сортировка по дате", meta: "ждёт: «Поиск по задачам»", chips: ["junior"] },
+  { id: 6, col: "done", name: "Тесты на приоритеты", meta: "слито 05:13 · 31 тест", chips: [] },
+  { id: 7, col: "done", name: "Выбор приоритета в диалоге", meta: "слито 04:53", chips: [] },
+  { id: 8, col: "fail", name: "Счётчик в заголовке", meta: "AWAITING_HUMAN · 3 попытки", why: "Попытка 3: flutter test — 1 из 16 упал: «Expected: Мои дела (2)»" },
+];
+
+function chipHTML(c) { return `<span class="chip${c === "touches_ui" || c === "junior" ? " out" : ""}">${c}</span>`; }
+
+function cardHTML(t) {
+  const mk = COLS.find(c => c.id === t.col).mk;
+  let body = "";
+  if (t.chips && t.chips.length) body += `<div class="chips">${t.chips.map(chipHTML).join("")}</div>`;
+  if (t.approval) body += `<div class="why">Нужно ваше одобрение: изменён ${t.approval.join(", ")}</div>`;
+  if (t.why) body += `<div class="why">${t.why}</div>`;
+  if (t.kind === "plan") {
+    body += `<ol class="plan-list">${t.plan.map(([n, d], i) =>
+      `<li><label><input type="checkbox" id="p${t.id}-${i}" checked> <span>${n}${d.length ? ` <span class="dep">← ${d.map(x => x + 1).join(", ")}</span>` : ""}</span></label></li>`).join("")}</ol>
+      <div class="actions"><button class="btn primary" data-act="approve" data-id="${t.id}">Утвердить выбранные</button>
+      <button class="btn" data-act="reject" data-id="${t.id}">Отклонить…</button></div>`;
+  } else if (t.kind === "merge") {
+    body += `<div class="actions"><button class="btn primary" data-act="approve" data-id="${t.id}">Слить</button>
+      <button class="btn" data-act="reject" data-id="${t.id}">Вернуть с комментарием…</button>
+      <button class="btn ghost" data-act="diff" data-id="${t.id}">Изменения</button></div>`;
+  } else if (t.col === "fail") {
+    body += `<div class="actions"><button class="btn" data-act="retry" data-id="${t.id}">Ещё попытка</button>
+      <button class="btn ghost" data-act="cancel" data-id="${t.id}">Отменить</button></div>`;
+  }
+  if (t.rejecting) {
+    body += `<div class="reject"><textarea id="c${t.id}" placeholder="Что исправить — исполнитель получит это первым уроком"></textarea>
+      <div class="actions"><button class="btn primary" data-act="send" data-id="${t.id}">Отправить на доработку</button>
+      <button class="btn ghost" data-act="close" data-id="${t.id}">Отмена</button></div></div>`;
+  }
+  return `<article class="card${t.col === "wait" ? " need" : ""}"><div class="head"><i class="mk ${mk}" style="margin-top:5px"></i>
+    <div class="name">${t.name}</div></div><div class="meta mono">${t.meta}</div>${body}</article>`;
+}
+
+let variant = "A";
+function render() {
+  const view = document.getElementById("view");
+  if (variant === "A") {
+    view.innerHTML = `<div class="board">${COLS.map(c => {
+      const list = tasks.filter(t => t.col === c.id);
+      return `<section class="col"><h2><i class="mk ${c.mk}"></i>${c.title}<span class="n">${list.length}</span></h2>${list.map(cardHTML).join("")}</section>`;
+    }).join("")}</div>`;
+  } else {
+    const order = ["wait", "fail", "work", "check", "queued", "done"];
+    view.innerHTML = `<div class="groups">${order.map(id => {
+      const c = COLS.find(x => x.id === id); const list = tasks.filter(t => t.col === id);
+      if (!list.length) return "";
+      return `<section class="group"><h2><i class="mk ${c.mk}"></i>${c.title} · ${list.length}</h2><div class="rows">${list.map(cardHTML).join("")}</div></section>`;
+    }).join("")}</div>`;
+  }
+}
+
+function toast(msg) {
+  const el = document.getElementById("toast"); el.textContent = msg; el.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { el.hidden = true; }, 2200);
+}
+
+document.getElementById("view").addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const t = tasks.find(x => x.id === +b.dataset.id);
+  switch (b.dataset.act) {
+    case "approve":
+      if (t.kind === "plan") {
+        const n = t.plan.filter((_, i) => document.getElementById(`p${t.id}-${i}`).checked).length;
+        t.col = "queued"; t.kind = null; t.meta = `создано задач: ${n}`; toast(`План утверждён: ${n} из ${t.plan.length} задач`);
+      } else { t.col = "done"; t.kind = null; t.approval = null; t.meta = "слито только что"; toast("Слито в integration"); }
+      break;
+    case "reject": t.rejecting = true; break;
+    case "close": t.rejecting = false; break;
+    case "send": {
+      const c = document.getElementById(`c${t.id}`).value.trim();
+      if (!c) { toast("Напишите, что исправить"); return; }
+      t.rejecting = false; t.col = "queued"; t.kind = null; t.approval = null; t.meta = "на доработке · урок: " + c.slice(0, 40); toast("Отправлено на доработку");
+      break;
+    }
+    case "retry": t.col = "queued"; t.why = null; t.meta = "попытка 4 · в очереди"; toast("Добавлена попытка"); break;
+    case "cancel": tasks = tasks.filter(x => x !== t); toast("Задача отменена"); break;
+    case "diff": toast("Откроется diff и итог ревью"); return;
+  }
+  render();
+});
+
+function setVariant(v) {
+  variant = v;
+  document.getElementById("vA").setAttribute("aria-pressed", v === "A");
+  document.getElementById("vB").setAttribute("aria-pressed", v === "B");
+  render();
+}
+document.getElementById("vA").onclick = () => setVariant("A");
+document.getElementById("vB").onclick = () => setVariant("B");
+document.getElementById("stopAll").onclick = () => { document.getElementById("incident").hidden = false; toast("Всё остановлено"); };
+document.getElementById("resume").onclick = () => { document.getElementById("incident").hidden = true; toast("Работа возобновлена"); };
+render();
+</script>
