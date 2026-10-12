@@ -3,6 +3,7 @@ package runas
 import (
 	"context"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,6 +22,9 @@ func TestCommandLineQuoting(t *testing.T) {
 }
 
 func TestEnvHasWorkerProfileAndNoOwnerPaths(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("пути и разделитель PATH — как в Windows; ai_worker есть только там")
+	}
 	t.Setenv("USERPROFILE", `C:\Users\Owner`)
 	t.Setenv("PATH", `C:\Windows\System32;C:\Users\Owner\go\bin;C:\Program Files\Git\cmd`)
 	t.Setenv("SystemDrive", "C:")

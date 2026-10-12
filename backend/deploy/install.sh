@@ -42,6 +42,8 @@ if [ -f .env ]; then
   set +a
 else
   say "2/6 Настройки"
+  IP_NOW=$(curl -fsS4 https://api.ipify.org || true)
+  [ -n "$IP_NOW" ] && echo "Своего домена нет? Подойдёт ${IP_NOW//./-}.sslip.io — он сам указывает на этот сервер."
   read -rp "Домен (DNS должен указывать на этот сервер): " DOMAIN
   [ -n "$DOMAIN" ] || fail "домен обязателен: без него не получить HTTPS-сертификат"
 
@@ -99,3 +101,4 @@ echo "Откройте ${PUBLIC_ORIGIN:-https://$DOMAIN} — первый сер
 echo "Первый вход: «Первый запуск: создать владельца». После этого регистрация закроется сама."
 echo "Обновление: $DIR/update.sh   Логи: cd $DIR && docker compose logs -f backend"
 echo "Бэкапы базы: $DIR/backups (раз в сутки, 14 дней)."
+echo "Автодеплой из GitHub: на своём ПК запустите backend/deploy/setup-ci-deploy.ps1 -Server <IP>."
