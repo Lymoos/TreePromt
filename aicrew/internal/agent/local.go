@@ -83,6 +83,7 @@ func (l *Local) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	msgs := []chatMessage{{Role: "system", Content: s.systemPrompt()}, {Role: "user", Content: s.taskPrompt()}}
 	var usage Usage
+	nudges := 0
 	for turn := 1; turn <= maxTurns; turn++ {
 		usage.Turns = turn
 		reply, err := l.chat(ctx, trimHistory(msgs, l.NumCtx), s.tools())
@@ -104,6 +105,13 @@ func (l *Local) Run(ctx context.Context, req Request) (Result, error) {
 		}
 		msgs = append(msgs, chatMessage{Role: "assistant", Content: msg.Content, ToolCalls: calls})
 		if len(calls) == 0 {
+			// Ответ словами без единой правки: маленькие модели любят описать план и остановиться.
+			if !s.changed && !req.ReadOnly && nudges < 2 {
+				nudges++
+				msgs = append(msgs, chatMessage{Role: "user", Content: "You have not changed any file yet. Do the task now by calling " +
+					"the tools (read_file, edit_file, write_file, run); call finish only when the change is made and the checks pass."})
+				continue
+			}
 			return Result{Summary: strings.TrimSpace(msg.Content), Usage: usage}, nil
 		}
 		for _, c := range calls {
@@ -286,7 +294,8 @@ func (l *Local) chat(ctx context.Context, msgs []chatMessage, tools []map[string
 	if l.NumCtx > 0 {
 		opts["num_ctx"] = l.NumCtx
 	}
-	body, _ := json.Marshal(map[string]any{"model": l.Model, "messages": msgs, "tools": tools, "stream": false, "options": opts})
+	body, _ := json.Marshal(map[string]any{"model": l.Model, "messages": msgs, "tools": tools, "stream": false, "options": opts,
+		"think": false}) // Qwen3 иначе думает в отдельном поле и может вернуть пустой ответ
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(l.BaseURL, "/")+"/api/chat", bytes.NewReader(body))
 	if err != nil {
 		return chatReply{}, err
@@ -372,6 +381,7 @@ type localSession struct {
 	req       Request
 	container string
 	started   bool
+	changed   bool // была хоть одна правка файла
 }
 
 func (s *localSession) systemPrompt() string {
@@ -566,6 +576,7 @@ func (s *localSession) writeFile(p, content string) (string, error) {
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		return "", err
 	}
+	s.changed = true
 	return fmt.Sprintf("wrote %s (%d lines)", p, strings.Count(content, "\n")+1), nil
 }
 
@@ -598,6 +609,7 @@ func (s *localSession) editFile(p, oldS, newS string) (string, error) {
 	if err := os.WriteFile(full, []byte(text), 0o644); err != nil {
 		return "", err
 	}
+	s.changed = true
 	return "edited " + p, nil
 }
 

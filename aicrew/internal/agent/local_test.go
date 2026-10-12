@@ -156,7 +156,7 @@ func TestLocalAgentStaysInsideTheWorktree(t *testing.T) {
 		text("I could not do it."),
 	)
 	res, err := l.Run(context.Background(), Request{TaskID: "t", Attempt: 1, Workdir: dir, Prompt: "p"})
-	if err != nil || res.Summary != "I could not do it." {
+	if err != nil || res.Summary != "done" || res.Usage.Turns != 8 { // после двух напоминаний действовать
 		t.Fatalf("%+v %v", res, err)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "escape.txt")); err == nil {
@@ -239,5 +239,24 @@ func TestLocalAgentRefusesWhenModelDoesNotFitInMemory(t *testing.T) {
 	}
 	if fo.unloads != 1 {
 		t.Fatalf("the model must be unloaded after the run, unloads=%d", fo.unloads)
+	}
+}
+
+func TestLocalAgentNudgesWhenItOnlyTalks(t *testing.T) {
+	l, fo, _, dir := newLocal(t,
+		text("Plan: I will make the list reorderable."),
+		call("write_file", map[string]any{"path": "a.txt", "content": "x"}),
+		text("Done."),
+	)
+	res, err := l.Run(context.Background(), Request{TaskID: "t", Attempt: 1, Workdir: dir, Prompt: "p"})
+	if err != nil || res.Summary != "Done." || res.Usage.Turns != 3 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	msgs := fo.requests[1]["messages"].([]any)
+	if last := msgs[len(msgs)-1].(map[string]any); last["role"] != "user" || !strings.Contains(last["content"].(string), "not changed any file") {
+		t.Fatalf("nudge: %v", last)
+	}
+	if fo.requests[0]["think"] != false {
+		t.Fatal("thinking must be off")
 	}
 }

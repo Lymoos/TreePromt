@@ -21,7 +21,7 @@ func TestLocalLive(t *testing.T) {
 	if model == "" {
 		model = "qwen3-coder:30b"
 	}
-	l := &Local{R: runner.New("docker"), Image: "aicrew-agent-flutter:local", BaseURL: "http://127.0.0.1:11434", Model: model, NumCtx: 32768}
+	l := &Local{R: runner.New("docker"), Image: "aicrew-agent-flutter:local", BaseURL: "http://127.0.0.1:11434", Model: model, NumCtx: 16384}
 	start := time.Now()
 	res, err := l.Run(context.Background(), Request{TaskID: "live", Attempt: 1, Workdir: repo, Prompt: os.Getenv("AICREW_LIVE_PROMPT"),
 		Timeout: 40 * time.Minute, Checks: []string{"flutter analyze", "flutter test"}})
