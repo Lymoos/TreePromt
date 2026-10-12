@@ -56,6 +56,8 @@ class MobileShell extends ConsumerWidget {
           offset: const Offset(0, 6),
           onSelected: (v) async {
             switch (v) {
+              case 'aicrew':
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const AiCrewScreen()));
               case 'trash':
                 Navigator.push(context, MaterialPageRoute(builder: (_) => const TrashScreen()));
               case 'login':
@@ -65,6 +67,7 @@ class MobileShell extends ConsumerWidget {
             }
           },
           itemBuilder: (_) => [
+            if (session.mode == SessionMode.server) menuItem('aicrew', Icons.view_kanban_outlined, 'AiCrew', c),
             menuItem('trash', Icons.delete_outline_rounded, 'Корзина', c),
             if (session.mode == SessionMode.server)
               menuItem('logout', Icons.logout_rounded, 'Выйти', c)

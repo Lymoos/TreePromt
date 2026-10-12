@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../models/aicrew.dart';
+
 /// Токены сессии устройства.
 class AuthTokens {
   const AuthTokens({required this.accessToken, required this.refreshToken, required this.userId, required this.deviceId});
@@ -229,6 +231,48 @@ class ApiClient {
     if (r.statusCode != 202) _fail(r);
     return _json(r)['request_id'] as String;
   }
+
+  // ── AiCrew (этапы 7.2–7.6): канбан и решения человека ──
+
+  Future<List<Map<String, dynamic>>> _list(String path, String key, [Map<String, String>? query]) async {
+    final r = await _authed('GET', _u(path, query));
+    if (r.statusCode != 200) _fail(r);
+    return (_json(r)[key] as List? ?? const []).whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> _post(String path, [Object? body]) async {
+    final r = await _authed('POST', _u(path), body: body ?? const <String, dynamic>{});
+    if (r.statusCode >= 300) _fail(r);
+  }
+
+  /// Канбан целиком: задачи, планы, запросы на решение, открытые инциденты, исполнители.
+  Future<AiCrewBoard> aicrewBoard() async {
+    final res = await Future.wait([
+      _list('/exec/tasks', 'tasks'),
+      _list('/exec/plans', 'plans'),
+      _list('/exec/approvals', 'approvals', {'status': 'pending'}),
+      _list('/exec/incidents', 'incidents', {'open': '1'}),
+      _list('/exec/workers', 'workers'),
+    ]);
+    return AiCrewBoard(
+      tasks: res[0].map(ExecTask.fromJson).toList(),
+      plans: res[1].map(ExecPlan.fromJson).toList(),
+      approvals: res[2].map(Approval.fromJson).toList(),
+      incidents: res[3].map(Incident.fromJson).toList(),
+      workers: res[4].map(WorkerView.fromJson).toList(),
+    );
+  }
+
+  /// Ответ на запрос: approve | reject (с комментарием) | partial (задачи плана).
+  Future<void> resolveApproval(String id, String decision, {String comment = '', List<int>? tasks}) =>
+      _post('/exec/approvals/$id', {'decision': decision, 'comment': comment, if (tasks != null) 'tasks': tasks});
+
+  Future<void> retryTask(String id) => _post('/exec/tasks/$id/retry');
+  Future<void> cancelTask(String id) => _post('/exec/tasks/$id/cancel');
+
+  /// «Остановить всё»: AiCrew на паузе до «Возобновить».
+  Future<void> stopAll(String reason) => _post('/exec/incidents', {'reason': reason});
+  Future<void> resolveIncident(String id, String comment) => _post('/exec/incidents/$id/resolve', {'comment': comment});
 
   void close() => _http.close();
 }

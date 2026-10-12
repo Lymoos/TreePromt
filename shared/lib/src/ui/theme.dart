@@ -307,6 +307,13 @@ ThemeData buildTheme(Brightness b) {
       thumbColor: WidgetStatePropertyAll(c.lineStrong),
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(color: c.fg),
+    checkboxTheme: CheckboxThemeData(
+      fillColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? c.fg : Colors.transparent),
+      checkColor: WidgetStatePropertyAll(c.bg),
+      side: WidgetStateBorderSide.resolveWith(
+          (s) => BorderSide(color: s.contains(WidgetState.selected) ? c.fg : c.lineStrong, width: 1.5)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+    ),
     textSelectionTheme: TextSelectionThemeData(
       cursorColor: c.fg,
       selectionColor: c.fg.withValues(alpha: 0.18),

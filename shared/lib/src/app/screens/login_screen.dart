@@ -25,7 +25,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    final url = ref.read(sessionProvider).serverUrl ?? ref.read(defaultServerUrlProvider);
+    final url = ref.read(defaultServerUrlProvider) ?? ref.read(sessionProvider).serverUrl;
     if (url != null) _server.text = url.toString();
   }
 
@@ -46,7 +46,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   String _message(Object e) {
-    if (e is NetworkException) return 'Сервер недоступен. Проверьте адрес и сеть.';
+    if (e is NetworkException) {
+      return ref.read(serverFixedProvider)
+          ? 'Нет связи с сервером PromptTree. Проверьте интернет.'
+          : 'Сервер недоступен. Проверьте адрес и сеть.';
+    }
     if (e is ApiException) {
       return switch (e.code) {
         'invalid_credentials' => 'Неверный email или пароль.',
@@ -148,19 +152,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     ];
 
     final fields = <Widget>[
-      step(TextField(
-        key: const Key('server'),
-        controller: _server,
-        keyboardType: TextInputType.url,
-        autocorrect: false,
-        textInputAction: TextInputAction.next,
-        decoration: const InputDecoration(
-          labelText: 'Сервер',
-          hintText: 'prompttree.example.com',
-          prefixIcon: Icon(Icons.dns_outlined, size: 19),
-        ),
-      )),
-      const SizedBox(height: 12),
+      // Сервер вшит в сборку — поле не нужно.
+      if (!ref.watch(serverFixedProvider)) ...[
+        step(TextField(
+          key: const Key('server'),
+          controller: _server,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          textInputAction: TextInputAction.next,
+          decoration: const InputDecoration(
+            labelText: 'Сервер',
+            hintText: 'prompttree.example.com',
+            prefixIcon: Icon(Icons.dns_outlined, size: 19),
+          ),
+        )),
+        const SizedBox(height: 12),
+      ],
       step(TextField(
         key: const Key('email'),
         controller: _email,
@@ -307,7 +314,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   padding: const EdgeInsets.fromLTRB(32, 32, 32, 24),
                   child: AutofillGroup(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      step(Text('Вход на сервер', style: ui(18, weight: FontWeight.w700, color: c.fg))),
+                      step(Text(ref.watch(serverFixedProvider) ? 'Вход' : 'Вход на сервер', style: ui(18, weight: FontWeight.w700, color: c.fg))),
                       const SizedBox(height: 4),
                       step(Text('Заметки синхронизируются между устройствами.', style: ui(13.5, color: c.muted))),
                       const SizedBox(height: 22),

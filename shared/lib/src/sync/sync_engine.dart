@@ -77,6 +77,11 @@ class SyncEngine {
   SyncState get state => _state;
   Stream<SyncState> get states => _states.stream;
 
+  final _exec = StreamController<void>.broadcast();
+
+  /// Сервер сообщил: у задач AiCrew что-то изменилось (канбан перечитывает данные).
+  Stream<void> get execEvents => _exec.stream;
+
   StreamSubscription<int>? _pendingSub;
   Timer? _timer;
   Timer? _periodic;
@@ -123,6 +128,7 @@ class SyncEngine {
   Future<void> dispose() async {
     await stop();
     await _states.close();
+    await _exec.close();
   }
 
   void schedule(Duration delay) {
@@ -246,6 +252,7 @@ class SyncEngine {
           try {
             final m = jsonDecode(msg as String) as Map<String, dynamic>;
             if (m['type'] == 'revision' || m['type'] == 'ready') schedule(Duration.zero);
+            if (m['type'] == 'exec') _exec.add(null);
           } catch (_) {}
         },
         onDone: _wsLost,

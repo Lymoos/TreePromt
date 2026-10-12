@@ -20,3 +20,4 @@ build/
 
 # Отчёты о несовпадении скриншотов (flutter test)
 test/failures/
+/.aicrew-local/
