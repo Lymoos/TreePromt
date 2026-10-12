@@ -13,6 +13,8 @@ import (
 const (
 	RefreshToken = "server_refresh_token"
 	ClaudeToken  = "claude_code_oauth_token"
+	// WorkerPassword — пароль ai_worker для окружения windows_user (вводит владелец).
+	WorkerPassword = "worker_password"
 )
 
 var ErrMissing = errors.New("secret is not set")

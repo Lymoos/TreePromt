@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"prompttree/aicrew/internal/agent"
 	"prompttree/aicrew/internal/api"
@@ -66,11 +68,20 @@ func (r *run) attachSkills(req *agent.Request) (attached any, cleanup func(), er
 	if r.h.Skills == nil {
 		return nil, cleanup, errors.New("this host has no skill registry")
 	}
-	dir, err := os.MkdirTemp("", "aicrew-skills-")
+	root := "" // временный каталог службы
+	if r.t.ExecutionEnv == "windows_user" && r.h.Windows != nil {
+		root = filepath.Join(r.h.Windows.WorkRoot, ".runs") // ai_worker читает только рабочую папку
+	}
+	base, err := os.MkdirTemp(root, "aicrew-skills-")
 	if err != nil {
 		return nil, cleanup, err
 	}
-	cleanup = func() { _ = os.RemoveAll(dir) }
+	cleanup = func() { _ = os.RemoveAll(base) }
+	dir := filepath.Join(base, "skills") // родитель — CLAUDE_CONFIG_DIR для windows_user
+	err = os.MkdirAll(dir, 0o755)
+	if err != nil {
+		return nil, cleanup, err
+	}
 	att, err := r.h.Skills.Materialize(r.t.RequiredSkills, dir)
 	if err != nil {
 		return nil, cleanup, err
@@ -102,4 +113,22 @@ func (r *run) attachMCP(req *agent.Request) (mcp.Resolved, error) {
 	}
 	req.MCPConfig, req.ExtraTools = res.ConfigJSON, res.AllowedTools
 	return res, nil
+}
+
+// WindowsEnv — окружение windows_user: исполнитель и проверки от ai_worker в рабочей папке.
+type WindowsEnv struct {
+	WorkRoot string
+	Agent    agent.Provider
+	Verifier Verifier
+}
+
+// Contains — путь внутри рабочей папки (только туда у ai_worker есть доступ).
+func (w *WindowsEnv) Contains(p string) bool {
+	root, err1 := filepath.Abs(w.WorkRoot)
+	abs, err2 := filepath.Abs(p)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	root = strings.ToLower(filepath.Clean(root)) + string(filepath.Separator)
+	return strings.HasPrefix(strings.ToLower(filepath.Clean(abs))+string(filepath.Separator), root)
 }

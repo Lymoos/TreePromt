@@ -27,7 +27,13 @@ type Config struct {
 	OllamaURL          string `json:"ollama_url"`           // для хоста
 	OllamaURLContainer string `json:"ollama_url_container"` // для контейнера исполнителя
 	JuniorModel        string `json:"junior_model"`
-	VisionModel        string `json:"vision_model"`
+	// Окружение windows_user (7.5b): пользователь Windows без прав администратора и его рабочая папка.
+	WorkerUser   string            `json:"worker_user"`   // ai_worker; пусто — окружение выключено
+	WorkRoot     string            `json:"work_root"`     // D:\aicrew-work — репозитории Roblox лежат здесь
+	WorkerClaude string            `json:"worker_claude"` // claude.exe в профиле ai_worker
+	WorkerTools  map[string]string `json:"worker_tools"`  // инструменты проверок: selene, stylua
+	RobloxStudio bool              `json:"roblox_studio"` // у ai_worker установлен Roblox Studio с включённым MCP
+	VisionModel  string            `json:"vision_model"`
 	// Сколько задач одновременно (решение 7.1: одна).
 	Concurrency int `json:"concurrency"`
 }
@@ -63,7 +69,13 @@ func Defaults() Config {
 		OllamaURLContainer: "http://host.docker.internal:11434",
 		JuniorModel:        "qwen2.5-coder:7b",
 		VisionModel:        "qwen2.5vl:7b",
-		Concurrency:        1,
+		WorkRoot:           `D:\aicrew-work`,
+		WorkerClaude:       `C:\Users\ai_worker\.local\bin\claude.exe`,
+		WorkerTools: map[string]string{
+			"selene": `C:\Users\ai_worker\.rokit\bin\selene.exe`,
+			"stylua": `C:\Users\ai_worker\.rokit\bin\stylua.exe`,
+		},
+		Concurrency: 1,
 	}
 }
 

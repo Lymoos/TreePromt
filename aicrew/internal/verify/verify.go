@@ -53,6 +53,12 @@ var templates = map[string]Profile{
 		{Name: "go test", Kind: "test", Argv: []string{"go", "test", "-json", "./..."}, Report: "go_json"},
 		{Name: "go build", Kind: "build", Argv: []string{"go", "build", "./..."}},
 	}},
+	// Roblox (окружение windows_user, проверка Native): форматирование и линтер Luau.
+	// Запуск в Studio проверяет исполнитель через MCP (start_stop_play, get_console_output).
+	"roblox": {Steps: []Step{
+		{Name: "stylua", Kind: "lint", Argv: []string{"stylua", "--check", "."}},
+		{Name: "selene", Kind: "lint", Argv: []string{"selene", "."}},
+	}},
 	"web": {Image: "aicrew-agent-web:local", Steps: []Step{
 		{Name: "npm ci", Kind: "build", Argv: []string{"npm", "ci"}},
 		{Name: "npm run lint", Kind: "lint", Argv: []string{"npm", "run", "lint", "--if-present"}},
@@ -62,7 +68,7 @@ var templates = map[string]Profile{
 }
 
 // Templates — имена встроенных профилей.
-func Templates() []string { return []string{"flutter", "go", "web"} }
+func Templates() []string { return []string{"flutter", "go", "roblox", "web"} }
 
 func ParseProfile(raw json.RawMessage) (Profile, error) {
 	var p Profile
@@ -232,4 +238,49 @@ func tail(s string, n int) string {
 		return s
 	}
 	return "…" + s[len(s)-n:]
+}
+
+// Native — проверка без контейнера, для окружения windows_user (Roblox): шаги профиля идут от
+// имени ai_worker через runas. argv[0] — имя инструмента, путь берётся из Tools; неизвестный
+// инструмент — отказ (Command Policy: неизвестное — DENY).
+type Native struct {
+	R     runner.Runner
+	Tools map[string]string // selene → C:\Users\ai_worker\.rokit\bin\selene.exe
+}
+
+func (v Native) Run(ctx context.Context, p Profile, workdir, _ string, timeout time.Duration) (Report, error) {
+	rep := Report{Passed: true}
+	deadline := time.Now().Add(timeout)
+	for _, s := range p.Steps {
+		exe, ok := v.Tools[s.Argv[0]]
+		if !ok {
+			return rep, fmt.Errorf("tool %q is not configured for windows_user checks", s.Argv[0])
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			rep.Passed, rep.TimedOut, rep.FailedKind = false, true, s.Kind
+			break
+		}
+		res, err := v.R.Run(ctx, runner.Command{Exe: exe, Args: s.Argv[1:], Dir: workdir, Timeout: left})
+		if err != nil {
+			return rep, err
+		}
+		sr := StepResult{Name: s.Name, ExitCode: res.ExitCode, Seconds: int(res.Duration.Seconds())}
+		out := strings.TrimSpace(res.Stdout + "\n" + res.Stderr)
+		if s.FailOnOutput && sr.ExitCode == 0 && strings.TrimSpace(res.Stdout) != "" {
+			sr.ExitCode = 1
+			out = "command printed output, which this step treats as failure:\n" + out
+		}
+		sr.Output = tail(out, 4000)
+		rep.Steps = append(rep.Steps, sr)
+		if res.TimedOut {
+			rep.Passed, rep.TimedOut, rep.FailedKind = false, true, s.Kind
+			break
+		}
+		if sr.ExitCode != 0 {
+			rep.Passed, rep.FailedKind = false, s.Kind
+			break
+		}
+	}
+	return rep, nil
 }

@@ -188,3 +188,41 @@ func TestTouchesUIAddsVisionQA(t *testing.T) {
 		t.Fatalf("%s %v", st, rv.roles)
 	}
 }
+
+func TestWindowsUserTasksRunAsAIWorkerInsideWorkRoot(t *testing.T) {
+	reg, _ := skills.Load(filepath.Join(repoRoot(), "skills"))
+	repo := gitRepo(t) // репозиторий внутри «рабочей папки»
+	work := filepath.Dir(repo)
+	_ = os.MkdirAll(filepath.Join(work, ".runs"), 0o755)
+	srv := &fakeServer{}
+	docker := &fakeAgent{run: writes("a", "x")}
+	var skillsIn string
+	worker := &fakeAgent{run: func(ctx context.Context, req agent.Request) (agent.Result, error) {
+		for _, m := range req.Mounts {
+			skillsIn = m.Host
+		}
+		return writes("game.luau", "print('hi')\n")(ctx, req)
+	}}
+	h := newHost(t, srv, docker, fakeVerifier{})
+	h.Skills = reg
+	h.Windows = &WindowsEnv{WorkRoot: work, Agent: worker, Verifier: fakeVerifier{rep: verify.Report{Passed: true}}}
+	tk := task(repo)
+	tk.ExecutionEnv, tk.RequiredSkills = "windows_user", []string{"dart-clean-code"}
+	h.Process(context.Background(), tk)
+	if st, _ := last(srv); st != "MERGEABLE" || worker.req.Role != "tech_lead_windows" || docker.req.TaskID != "" {
+		t.Fatalf("%s %+v", st, worker.req)
+	}
+	if !strings.HasPrefix(strings.ToLower(skillsIn), strings.ToLower(filepath.Join(work, ".runs"))) {
+		t.Fatalf("skills for ai_worker must live inside the work root: %s", skillsIn)
+	}
+
+	srv2 := &fakeServer{}
+	h2 := newHost(t, srv2, docker, fakeVerifier{})
+	h2.Windows = &WindowsEnv{WorkRoot: t.TempDir(), Agent: worker, Verifier: fakeVerifier{}}
+	tk2 := task(gitRepo(t))
+	tk2.ExecutionEnv = "windows_user"
+	h2.Process(context.Background(), tk2)
+	if _, f := last(srv2); f.FailureCode != "repo_outside_work_root" {
+		t.Fatalf("%+v", f)
+	}
+}

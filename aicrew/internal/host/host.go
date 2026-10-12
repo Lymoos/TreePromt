@@ -46,11 +46,13 @@ type Host struct {
 	Verifier Verifier
 	Reviewer review.Reviewer
 	// 7.5: Junior (Claude Code на локальной модели), реестры скиллов и MCP, Manager.
-	Junior         agent.Provider
-	Skills         *skills.Registry
-	MCP            *mcp.Registry
-	Planner        Planner
-	Catalog        manager.Catalog
+	Junior  agent.Provider
+	Skills  *skills.Registry
+	MCP     *mcp.Registry
+	Planner Planner
+	Catalog manager.Catalog
+	// Windows — окружение windows_user (ai_worker); nil — не настроено.
+	Windows        *WindowsEnv
 	WorkerID       string
 	Log            *slog.Logger
 	PollEvery      time.Duration
@@ -221,12 +223,23 @@ func (r *run) pipeline() error {
 	profile := parsed.ForStage(verify.StageAttempt)
 
 	// Исполнитель, скиллы и MCP-профиль задачи (7.5). Подключается только то, что есть в реестрах.
-	ag, role := h.Agent, "tech_lead"
+	ag, role, verifier := h.Agent, "tech_lead", h.Verifier
 	if t.Executor == "junior" {
 		if h.Junior == nil {
 			return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "no_junior", Message: "this host has no local model for junior tasks"}
 		}
 		ag, role = h.Junior, "junior"
+	}
+	if t.ExecutionEnv == "windows_user" {
+		// Окружение windows_user (Roblox): исполнитель и проверки — от ai_worker, без контейнера.
+		if h.Windows == nil {
+			return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "no_windows_user", Message: "windows_user environment is not set up on this host"}
+		}
+		if !h.Windows.Contains(path) {
+			return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "repo_outside_work_root",
+				Message: "windows_user tasks need the repository inside " + h.Windows.WorkRoot}
+		}
+		ag, role, verifier = h.Windows.Agent, "tech_lead_windows", h.Windows.Verifier
 	}
 	req := agent.Request{
 		TaskID: t.ID, Attempt: t.Attempt, Role: role, Prompt: t.Prompt, Workdir: path,
@@ -264,7 +277,7 @@ func (r *run) pipeline() error {
 		return err
 	}
 
-	rep, err := h.Verifier.Run(r.ctx, profile, path, fmt.Sprintf("aicrew-verify-%s-%d", t.ID, t.Attempt),
+	rep, err := verifier.Run(r.ctx, profile, path, fmt.Sprintf("aicrew-verify-%s-%d", t.ID, t.Attempt),
 		time.Duration(t.VerifyRuntimeSec)*time.Second)
 	if user, lost := r.stopped(); user || lost {
 		return errStopped

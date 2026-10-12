@@ -38,6 +38,7 @@ import (
 	"prompttree/aicrew/internal/manager"
 	"prompttree/aicrew/internal/mcp"
 	"prompttree/aicrew/internal/review"
+	"prompttree/aicrew/internal/runas"
 	"prompttree/aicrew/internal/runner"
 	"prompttree/aicrew/internal/secrets"
 	"prompttree/aicrew/internal/skills"
@@ -64,6 +65,7 @@ func usage() {
   check-claude-token проверить сохранённый токен (сам токен не выводится)
   add-repo           привязать локальный репозиторий: -project <id> -path <папка> [-name] [-branch] [-profile файл.json]
   run                брать и выполнять задачи, сливать проверенные в integration-ветку
+  set-worker         окружение windows_user: пароль ai_worker (-user, -roblox, -clipboard)
   set-profile        профиль проверки репозитория: -path <папка> -profile файл.json ({"template":"flutter"})
   promote            перенести integration в основную ветку после проверки: -path <папка>`)
 }
@@ -269,6 +271,40 @@ func dispatch(cmd string, args []string) error {
 	case "run":
 		return runHost(ctx, e)
 
+	case "set-worker":
+		// Окружение windows_user: пользователь ai_worker (создаёт владелец скриптом aicrew/setup).
+		fs := flag.NewFlagSet("set-worker", flag.ExitOnError)
+		user := fs.String("user", "ai_worker", "пользователь Windows для задач windows_user")
+		clip := fs.Bool("clipboard", false, "взять пароль из буфера обмена")
+		roblox := fs.Bool("roblox", false, "у пользователя установлен Roblox Studio с включённым MCP")
+		_ = fs.Parse(args)
+		var pass string
+		if *clip {
+			b, err := exec.Command("powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw").Output()
+			if err != nil {
+				return err
+			}
+			pass = strings.TrimRight(string(b), "\r\n")
+		} else {
+			var err error
+			if pass, err = readSecret("Пароль " + *user + ": "); err != nil {
+				return err
+			}
+		}
+		if pass == "" {
+			return errors.New("пустой пароль")
+		}
+		if err := e.sec.Set(secrets.WorkerPassword, pass); err != nil {
+			return err
+		}
+		e.cfg.WorkerUser, e.cfg.RobloxStudio = *user, *roblox
+		if err := config.Save(e.cfgPath, e.cfg); err != nil {
+			return err
+		}
+		fmt.Printf("Окружение windows_user: %s, рабочая папка %s, Roblox Studio: %v. Пароль зашифрован DPAPI.\n",
+			*user, e.cfg.WorkRoot, *roblox)
+		return nil
+
 	case "set-profile":
 		fs := flag.NewFlagSet("set-profile", flag.ExitOnError)
 		path := fs.String("path", "", "папка репозитория")
@@ -349,11 +385,30 @@ func runHost(ctx context.Context, e *env) error {
 		visionQA = vision.Vision{R: run, BuildImage: e.cfg.AgentImage, Image: "aicrew-vision:local",
 			OllamaURL: e.cfg.OllamaURL, Model: e.cfg.VisionModel}
 	}
+	envs, caps := append([]string{}, e.cfg.Environments...), append([]string{}, e.cfg.Capabilities...)
+	var windowsEnv *host.WindowsEnv
+	if e.cfg.WorkerUser != "" {
+		if pw, err := e.sec.Get(secrets.WorkerPassword); err == nil && pw != "" {
+			allowed := map[string]bool{strings.ToLower(e.cfg.WorkerClaude): true}
+			for _, p := range e.cfg.WorkerTools {
+				allowed[strings.ToLower(p)] = true
+			}
+			ra := runas.Runner{User: e.cfg.WorkerUser, WorkRoot: e.cfg.WorkRoot, Allowed: allowed,
+				Password: func() (string, error) { return e.sec.Get(secrets.WorkerPassword) }}
+			windowsEnv = &host.WindowsEnv{WorkRoot: e.cfg.WorkRoot,
+				Agent:    &agent.ClaudeCode{R: ra, Model: e.cfg.ClaudeModel, NativeExe: e.cfg.WorkerClaude, Token: claude.Token},
+				Verifier: verify.Native{R: ra, Tools: e.cfg.WorkerTools}}
+			envs = append(envs, "windows_user")
+			if e.cfg.RobloxStudio {
+				caps = append(caps, "roblox_studio")
+			}
+		}
+	}
 	reg := api.Registries{Skills: skillReg.Names(), MCPProfiles: mcpReg.ProfileNames()}
 	for _, x := range executors {
 		reg.Executors = append(reg.Executors, x.Name)
 	}
-	h, err = e.client.RegisterHost(ctx, e.cfg.HostName, runtime.GOOS, e.cfg.Capabilities, e.cfg.Environments,
+	h, err = e.client.RegisterHost(ctx, e.cfg.HostName, runtime.GOOS, caps, envs,
 		[]api.WorkerSpec{{Kind: "claude_code", Model: e.cfg.ClaudeModel}}, reg)
 	if err != nil {
 		return err
@@ -365,7 +420,7 @@ func runHost(ctx context.Context, e *env) error {
 	}
 	mcpOpts := map[string]string{}
 	for name, p := range mcpReg.Profiles {
-		if len(p.Environments) == 0 || containsAny(p.Environments, e.cfg.Environments) {
+		if len(p.Environments) == 0 || containsAny(p.Environments, envs) {
 			mcpOpts[name] = p.Description
 		}
 	}
@@ -385,7 +440,8 @@ func runHost(ctx context.Context, e *env) error {
 		Skills:  skillReg,
 		MCP:     mcpReg,
 		Planner: manager.Manager{Agent: claude, Model: e.cfg.ManagerModel},
-		Catalog: manager.Catalog{Capabilities: e.cfg.Capabilities, Environments: e.cfg.Environments,
+		Windows: windowsEnv,
+		Catalog: manager.Catalog{Capabilities: caps, Environments: envs,
 			Executors: executors, Skills: manager.Options(skillOpts), MCPProfiles: manager.Options(mcpOpts)},
 	}
 
@@ -405,7 +461,7 @@ func runHost(ctx context.Context, e *env) error {
 		return err
 	}
 	log.Info("aicrew-host started", "host", h.ID, "worker", workerID, "repositories", len(paths), "orphans_removed", len(removed),
-		"skills", len(reg.Skills), "mcp_profiles", reg.MCPProfiles, "executors", reg.Executors, "vision_qa", visionQA != nil)
+		"skills", len(reg.Skills), "mcp_profiles", reg.MCPProfiles, "executors", reg.Executors, "vision_qa", visionQA != nil, "environments", envs)
 	return hst.Run(ctx)
 }
 

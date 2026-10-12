@@ -1,9 +1,13 @@
 package verify
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"prompttree/aicrew/internal/runner"
 )
 
 func TestTemplateAndStages(t *testing.T) {
@@ -95,5 +99,29 @@ func TestGoJSONReport(t *testing.T) {
 	}
 	if r.Failures[0].Name != "m/a.TestBad" || !strings.Contains(r.Failures[0].Message, "want 3") || r.Failures[1].Name != "m/broken" {
 		t.Fatalf("failures: %+v", r.Failures)
+	}
+}
+
+type recRunner struct{ exes []string }
+
+func (r *recRunner) Run(_ context.Context, c runner.Command) (runner.Result, error) {
+	r.exes = append(r.exes, c.Exe+" "+strings.Join(c.Args, " ")+" @"+c.Dir)
+	return runner.Result{}, nil
+}
+
+func TestNativeRobloxChecksUseOnlyConfiguredTools(t *testing.T) {
+	p, err := ParseProfile(json.RawMessage(`{"template":"roblox"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := &recRunner{}
+	v := Native{R: rr, Tools: map[string]string{"stylua": `C:\w\stylua.exe`, "selene": `C:\w\selene.exe`}}
+	rep, err := v.Run(context.Background(), p, `D:\aicrew-work\game`, "", time.Minute)
+	if err != nil || !rep.Passed || len(rr.exes) != 2 || rr.exes[1] != `C:\w\selene.exe . @D:\aicrew-work\game` {
+		t.Fatalf("%+v %v %v", rep, err, rr.exes)
+	}
+	bad := Profile{Steps: []Step{{Name: "x", Argv: []string{"powershell", "-c", "rm -r ~"}}}}
+	if _, err := v.Run(context.Background(), bad, "", "", time.Minute); err == nil {
+		t.Fatal("unknown tool must be denied")
 	}
 }
