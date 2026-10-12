@@ -15,6 +15,7 @@ export 'src/app/session.dart';
 export 'src/app/shells/desktop_shell.dart';
 export 'src/app/shells/mobile_shell.dart';
 export 'src/app/tree_actions.dart';
+export 'src/app/widgets/aicrew_send_dialog.dart';
 export 'src/app/widgets/common.dart';
 export 'src/app/widgets/dialogs.dart';
 export 'src/app/widgets/sync_badge.dart';

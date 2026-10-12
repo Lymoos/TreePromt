@@ -263,6 +263,39 @@ class ApiClient {
     );
   }
 
+  /// Репозитории AiCrew (привязанные к проектам на ПК с aicrew-host).
+  Future<List<ExecRepository>> execRepositories() async =>
+      (await _list('/exec/repositories', 'repositories')).map(ExecRepository.fromJson).toList();
+
+  /// AI Task из дерева → задача AiCrew. Текст сервер берёт из итоговой задачи узла.
+  Future<String> createExecTask({
+    required String nodeId,
+    required String repositoryId,
+    String mode = 'manual',
+    String executor = 'claude',
+    String reviewLevel = 'logic',
+    bool touchesUI = false,
+  }) async {
+    final r = await _authed('POST', _u('/exec/tasks'), body: {
+      'node_id': nodeId,
+      'repository_id': repositoryId,
+      'execution_mode': mode,
+      'executor': executor,
+      'review_level': reviewLevel,
+      'touches_ui': touchesUI,
+    });
+    if (r.statusCode != 201) _fail(r);
+    return _json(r)['id'] as String;
+  }
+
+  /// AI Task из дерева → план Manager'а (декомпозиция на подзадачи).
+  Future<String> createExecPlan({required String nodeId, required String repositoryId, String mode = 'manual'}) async {
+    final r = await _authed('POST', _u('/exec/plans'),
+        body: {'node_id': nodeId, 'repository_id': repositoryId, 'execution_mode': mode, 'request': ''});
+    if (r.statusCode != 201) _fail(r);
+    return _json(r)['id'] as String;
+  }
+
   /// Ответ на запрос: approve | reject (с комментарием) | partial (задачи плана).
   Future<void> resolveApproval(String id, String decision, {String comment = '', List<int>? tasks}) =>
       _post('/exec/approvals/$id', {'decision': decision, 'comment': comment, if (tasks != null) 'tasks': tasks});

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:prompttree_shared/prompttree_shared.dart';
 
 import 'providers.dart';
+import 'widgets/aicrew_send_dialog.dart';
 import 'widgets/dialogs.dart';
 
 /// Куда создавать новый узел.
@@ -161,6 +162,13 @@ class TreeActions {
           label: isTask ? 'Сделать черновиком' : 'Сделать AI Task',
           marker: isTask ? MarkerType.rawNote : MarkerType.aiNone,
           run: (_) => _tree.changeKind(r.id, isTask ? NodeKind.rawNote : NodeKind.aiTask),
+        ),
+      if (isTask && ref.read(sessionProvider).mode == SessionMode.server)
+        TreeAction(
+          label: 'Отправить в AiCrew…',
+          icon: Icons.rocket_launch_outlined,
+          dividerBefore: true,
+          run: (c) => sendToAiCrew(c, ref, nodeId: r.id, projectId: r.projectId, name: r.name),
         ),
       TreeAction(
         label: 'Удалить',

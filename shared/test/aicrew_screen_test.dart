@@ -76,6 +76,7 @@ Future<_Recorder> _pump(WidgetTester tester, {required double width, AiCrewBoard
 }
 
 void main() {
+  sendDialogTests();
   testWidgets('desktop: six columns, cancelled tasks are hidden', (tester) async {
     await _pump(tester, width: 1600);
     for (final title in ['ОЧЕРЕДЬ', 'В РАБОТЕ', 'ПРОВЕРКА', 'ЖДЁТ РЕШЕНИЯ', 'СЛИТО', 'ОШИБКИ']) {
@@ -142,5 +143,82 @@ void main() {
     expect(taskColumn('AWAITING_HUMAN'), KanbanCol.fail);
     expect(taskColumn('CANCELLED'), isNull);
     expect(planColumn('AWAITING_APPROVAL'), KanbanCol.wait);
+  });
+}
+
+class _SendRecorder {
+  final calls = <(String, String, Map<String, dynamic>)>[];
+  ApiClient client(TokenStore tokens) => ApiClient(
+        baseUrl: Uri.parse('http://test'),
+        tokens: tokens,
+        client: MockClient((req) async {
+          final body = req.body.isEmpty ? <String, dynamic>{} : jsonDecode(req.body) as Map<String, dynamic>;
+          calls.add((req.method, req.url.path, body));
+          if (req.url.path.endsWith('/exec/repositories')) {
+            return http.Response.bytes(
+                utf8.encode(jsonEncode({
+                  'repositories': [
+                    {'id': 'r1', 'project_id': 'proj', 'name': 'todo-sandbox', 'local_path': 'C:/x'},
+                    {'id': 'r2', 'project_id': 'other', 'name': 'чужой', 'local_path': 'C:/y'},
+                  ]
+                })),
+                200);
+          }
+          return http.Response(jsonEncode({'id': 'new'}), 201);
+        }),
+      );
+}
+
+Future<_SendRecorder> _pumpSend(WidgetTester tester) async {
+  final rec = _SendRecorder();
+  final tokens = MemoryTokenStore();
+  await tokens.write(const AuthTokens(accessToken: 'a', refreshToken: 'r', userId: 'u', deviceId: 'd'));
+  tester.view.physicalSize = const Size(1200, 1600);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(ProviderScope(
+    overrides: [apiProvider.overrideWithValue(rec.client(tokens))],
+    child: MaterialApp(
+      theme: buildTheme(Brightness.light),
+      home: Scaffold(body: Consumer(builder: (context, ref, _) => Center(
+        child: FilledButton(
+          onPressed: () => sendToAiCrew(context, ref, nodeId: 'n1', projectId: 'proj', name: 'Поиск по задачам'),
+          child: const Text('open'),
+        ),
+      ))),
+    ),
+  ));
+  await tester.tap(find.text('open'));
+  await tester.pumpAndSettle();
+  return rec;
+}
+
+
+void sendDialogTests() {
+  testWidgets('send dialog: one task with chosen settings', (tester) async {
+    final rec = await _pumpSend(tester);
+    expect(find.text('todo-sandbox'), findsOneWidget);
+    expect(find.text('чужой'), findsNothing, reason: 'only repositories of this project');
+    await tester.tap(find.textContaining('Junior', findRichText: true));
+    await tester.tap(find.textContaining('Меняет интерфейс', findRichText: true));
+    await tester.tap(find.text('Отправить'));
+    await tester.pumpAndSettle();
+    final post = rec.calls.firstWhere((c) => c.$1 == 'POST');
+    expect(post.$2, '/api/v1/exec/tasks');
+    expect(post.$3, containsPair('node_id', 'n1'));
+    expect(post.$3, containsPair('repository_id', 'r1'));
+    expect(post.$3, containsPair('executor', 'junior'));
+    expect(post.$3, containsPair('touches_ui', true));
+    expect(find.text('Задача отправлена в AiCrew'), findsOneWidget);
+  });
+
+  testWidgets('send dialog: via Manager creates a plan', (tester) async {
+    final rec = await _pumpSend(tester);
+    await tester.tap(find.textContaining('Через Manager', findRichText: true));
+    await tester.pump();
+    expect(find.textContaining('Junior', findRichText: true), findsNothing, reason: 'Manager picks executors itself');
+    await tester.tap(find.text('Отправить'));
+    await tester.pumpAndSettle();
+    expect(rec.calls.firstWhere((c) => c.$1 == 'POST').$2, '/api/v1/exec/plans');
   });
 }

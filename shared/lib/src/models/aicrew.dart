@@ -153,3 +153,15 @@ class AiCrewBoard {
       .where((a) => a.status == 'pending' && ((taskId != null && a.taskId == taskId) || (planId != null && a.planId == planId)))
       .firstOrNull;
 }
+
+class ExecRepository {
+  const ExecRepository({required this.id, required this.projectId, required this.name, required this.localPath});
+  final String id, projectId, name, localPath;
+
+  factory ExecRepository.fromJson(Map<String, dynamic> j) => ExecRepository(
+        id: j['id'] as String,
+        projectId: j['project_id'] as String? ?? '',
+        name: j['name'] as String? ?? '',
+        localPath: j['local_path'] as String? ?? '',
+      );
+}
