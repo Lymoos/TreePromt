@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/exec/plans/{id}/reject", s.authed(s.handleExecRejectPlan))
 	mux.HandleFunc("POST /api/v1/exec/plans/{id}/result", s.authed(s.handleExecPlanResult))
 	mux.HandleFunc("GET /api/v1/exec/incidents", s.authed(s.handleExecListIncidents))
+	mux.HandleFunc("GET /api/v1/exec/workers", s.authed(s.handleExecListWorkers))
 	mux.HandleFunc("POST /api/v1/exec/incidents", s.authed(s.handleExecStop))
 	mux.HandleFunc("POST /api/v1/exec/incidents/{id}/resolve", s.authed(s.handleExecResolveIncident))
 	mux.HandleFunc("POST /api/v1/exec/repositories/{id}/integration-red", s.authed(s.handleExecIntegrationRed))

@@ -1207,6 +1207,10 @@ type TaskView struct {
 	// ApprovalRequired — что требует вашего одобрения перед слиянием.
 	ApprovalRequired []string        `json:"approval_required"`
 	Review           json.RawMessage `json:"review"`
+	PlanID           *uuid.UUID      `json:"plan_id"`
+	Executor         string          `json:"executor"`
+	TouchesUI        bool            `json:"touches_ui"`
+	RequiredSkills   []string        `json:"required_skills"`
 	RetryAfter       *time.Time      `json:"retry_after"`
 	UpdatedAt        time.Time       `json:"updated_at"`
 }
@@ -1214,7 +1218,8 @@ type TaskView struct {
 func (s *Service) ListTasks(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID) ([]TaskView, error) {
 	rows, err := s.pool.Query(ctx, `SELECT t.id, t.project_id, t.node_id, t.repository_id, t.title, t.status, t.attempt,
 			t.max_attempts, t.failure_class, t.failure_code, t.base_commit, t.result_commit, t.merge_commit, t.execution_mode,
-			t.review_level, t.approval_required, t.review, t.retry_after, t.updated_at
+			t.review_level, t.approval_required, t.review, t.plan_id, t.executor, t.touches_ui, t.required_skills,
+			t.retry_after, t.updated_at
 		FROM exec.tasks t JOIN core.project_access a ON a.project_id = t.project_id AND a.user_id = $1
 		WHERE ($2::uuid IS NULL OR t.project_id = $2) ORDER BY t.updated_at DESC LIMIT 500`, userID, projectID)
 	if err != nil {
@@ -1224,7 +1229,7 @@ func (s *Service) ListTasks(ctx context.Context, userID uuid.UUID, projectID *uu
 		var v TaskView
 		err := r.Scan(&v.ID, &v.ProjectID, &v.NodeID, &v.RepositoryID, &v.Title, &v.Status, &v.Attempt, &v.MaxAttempts,
 			&v.FailureClass, &v.FailureCode, &v.BaseCommit, &v.ResultCommit, &v.MergeCommit, &v.Mode, &v.ReviewLevel, &v.ApprovalRequired,
-			&v.Review, &v.RetryAfter, &v.UpdatedAt)
+			&v.Review, &v.PlanID, &v.Executor, &v.TouchesUI, &v.RequiredSkills, &v.RetryAfter, &v.UpdatedAt)
 		return v, err
 	})
 }
@@ -1255,4 +1260,33 @@ func (s *Service) KeepWorktrees(ctx context.Context, id Identity) ([]uuid.UUID, 
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+}
+
+// WorkerView — исполнитель для канбана: «аватар агента» из реестра (ТЗ п. 8.1).
+type WorkerView struct {
+	HostName    string    `json:"host_name"`
+	HostStatus  string    `json:"host_status"`
+	Kind        string    `json:"kind"`
+	Model       string    `json:"model"`
+	Status      string    `json:"status"`
+	HeartbeatAt time.Time `json:"heartbeat_at"`
+	Executors   []string  `json:"executors"`
+}
+
+func (s *Service) ListWorkers(ctx context.Context, userID uuid.UUID) ([]WorkerView, error) {
+	rows, err := s.pool.Query(ctx, `SELECT h.name, CASE WHEN h.last_seen_at > now() - interval '2 minutes' THEN 'online' ELSE 'offline' END,
+			w.kind, w.model, w.status, w.heartbeat_at, h.executors
+		FROM exec.workers w JOIN exec.hosts h ON h.id = w.host_id WHERE h.user_id = $1 ORDER BY h.name, w.kind`, userID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (WorkerView, error) {
+		var v WorkerView
+		var ex []byte
+		err := r.Scan(&v.HostName, &v.HostStatus, &v.Kind, &v.Model, &v.Status, &v.HeartbeatAt, &ex)
+		if err == nil {
+			err = json.Unmarshal(ex, &v.Executors)
+		}
+		return v, err
+	})
 }

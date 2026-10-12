@@ -178,6 +178,12 @@ class _Sidebar extends ConsumerWidget {
                     ),
         ),
         Divider(height: 1, color: c.line),
+        if (session.mode == SessionMode.server)
+          _SideButton(
+            icon: Icons.view_kanban_outlined,
+            label: 'AiCrew',
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AiCrewScreen())),
+          ),
         _SideButton(
           icon: Icons.delete_outline,
           label: 'Корзина',

@@ -4,6 +4,7 @@ library;
 
 export 'src/app/prompttree_app.dart';
 export 'src/app/providers.dart';
+export 'src/app/screens/aicrew_screen.dart';
 export 'src/app/screens/conflict_screen.dart';
 export 'src/app/screens/editor_screen.dart';
 export 'src/app/screens/login_screen.dart';

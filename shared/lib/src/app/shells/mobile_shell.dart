@@ -35,6 +35,8 @@ class MobileShell extends ConsumerWidget {
             color: c.bg,
             onSelected: (v) async {
               switch (v) {
+                case 'aicrew':
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const AiCrewScreen()));
                 case 'trash':
                   Navigator.push(context, MaterialPageRoute(builder: (_) => const TrashScreen()));
                 case 'login':
@@ -45,6 +47,7 @@ class MobileShell extends ConsumerWidget {
               }
             },
             itemBuilder: (_) => [
+              if (session.mode == SessionMode.server) const PopupMenuItem(value: 'aicrew', child: Text('AiCrew')),
               const PopupMenuItem(value: 'trash', child: Text('Корзина')),
               if (session.mode == SessionMode.server)
                 const PopupMenuItem(value: 'logout', child: Text('Выйти'))

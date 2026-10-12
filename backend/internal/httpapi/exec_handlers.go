@@ -529,3 +529,12 @@ func (s *Server) handleExecResolveApproval(w http.ResponseWriter, r *http.Reques
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *Server) handleExecListWorkers(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	list, err := s.exec.ListWorkers(r.Context(), id.UserID)
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workers": list})
+}
