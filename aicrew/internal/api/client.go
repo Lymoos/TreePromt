@@ -433,3 +433,44 @@ func (c *Client) SetSkillPolicy(ctx context.Context, repoID string, required, fo
 		map[string]any{"required": required, "forbidden": forbidden}, nil)
 	return err
 }
+
+// Project — проект PromptTree (для привязки репозитория по имени).
+type Project struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	DeletedAt *string `json:"deleted_at"`
+}
+
+// Projects — живые проекты пользователя: проходит весь журнал синхронизации, берёт последнее состояние.
+func (c *Client) Projects(ctx context.Context) ([]Project, error) {
+	byID := map[string]Project{}
+	var order []string
+	cursor := int64(0)
+	for {
+		var page struct {
+			Projects []Project `json:"projects"`
+			Cursor   int64     `json:"cursor"`
+			HasMore  bool      `json:"has_more"`
+		}
+		if _, err := c.authed(ctx, http.MethodGet, fmt.Sprintf("/sync/pull?cursor=%d&limit=500", cursor), nil, &page); err != nil {
+			return nil, err
+		}
+		for _, p := range page.Projects {
+			if _, ok := byID[p.ID]; !ok {
+				order = append(order, p.ID)
+			}
+			byID[p.ID] = p
+		}
+		if !page.HasMore || page.Cursor <= cursor {
+			break
+		}
+		cursor = page.Cursor
+	}
+	var out []Project
+	for _, id := range order {
+		if p := byID[id]; p.DeletedAt == nil {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}

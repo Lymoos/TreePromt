@@ -230,7 +230,7 @@ func dispatch(cmd string, args []string) error {
 
 	case "add-repo":
 		fs := flag.NewFlagSet("add-repo", flag.ExitOnError)
-		project := fs.String("project", "", "id проекта PromptTree")
+		project := fs.String("project", "", "проект PromptTree: имя или id")
 		path := fs.String("path", "", "папка репозитория")
 		name := fs.String("name", "", "название (по умолчанию — имя папки)")
 		branch := fs.String("branch", "main", "основная ветка")
@@ -260,11 +260,15 @@ func dispatch(cmd string, args []string) error {
 			}
 			prof = b
 		}
+		projectID, err := resolveProject(ctx, e.client, *project)
+		if err != nil {
+			return err
+		}
 		h, err := register(ctx, e)
 		if err != nil {
 			return err
 		}
-		r, err := e.client.AddRepository(ctx, *project, h.ID, *name, abs, *branch, prof)
+		r, err := e.client.AddRepository(ctx, projectID, h.ID, *name, abs, *branch, prof)
 		if err != nil {
 			return err
 		}
@@ -379,6 +383,34 @@ func dispatch(cmd string, args []string) error {
 	}
 	usage()
 	return fmt.Errorf("неизвестная команда %q", cmd)
+}
+
+// resolveProject — id проекта по имени (как в дереве) или сам id, если передан id.
+func resolveProject(ctx context.Context, c *api.Client, nameOrID string) (string, error) {
+	if _, err := uuid.Parse(nameOrID); err == nil {
+		return nameOrID, nil
+	}
+	ps, err := c.Projects(ctx)
+	if err != nil {
+		return "", err
+	}
+	var found []api.Project
+	for _, p := range ps {
+		if strings.EqualFold(strings.TrimSpace(p.Name), strings.TrimSpace(nameOrID)) {
+			found = append(found, p)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0].ID, nil
+	case 0:
+		var names []string
+		for _, p := range ps {
+			names = append(names, "«"+p.Name+"»")
+		}
+		return "", fmt.Errorf("проекта «%s» нет; есть: %s", nameOrID, strings.Join(names, ", "))
+	}
+	return "", fmt.Errorf("проектов «%s» несколько — укажите id: %s, %s…", nameOrID, found[0].ID, found[1].ID)
 }
 
 func register(ctx context.Context, e *env) (api.Host, error) {
