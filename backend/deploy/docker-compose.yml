@@ -28,7 +28,7 @@ services:
       ALLOW_REGISTRATION: "false" # регистрация открыта, только пока нет ни одного пользователя
       TRUST_PROXY: "true"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
 
   # Caddy: HTTPS (Let's Encrypt), веб-версия и прокси /api → backend.

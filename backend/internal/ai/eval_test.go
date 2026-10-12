@@ -18,7 +18,7 @@ func evalModel(t *testing.T) *Gemini {
 	}
 	model := os.Getenv("GEMINI_MODEL")
 	if model == "" {
-		model = "gemini-2.5-flash"
+		model = "gemini-3.8-flash"
 	}
 	return NewGemini(key, model)
 }

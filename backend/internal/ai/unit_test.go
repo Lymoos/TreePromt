@@ -219,3 +219,35 @@ func TestGeminiRejectsNonJSONAndEarlyStop(t *testing.T) {
 		t.Fatal("truncated answer accepted")
 	}
 }
+
+func TestGeminiSwitchesToNewestFlashWhenModelIsRetired(t *testing.T) {
+	var calls []string
+	g := fakeGemini(t, func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/v1beta/models":
+			w.Write([]byte(`{"models":[
+				{"name":"models/gemini-2.5-flash","supportedGenerationMethods":["generateContent"]},
+				{"name":"models/gemini-3.8-flash","supportedGenerationMethods":["generateContent","countTokens"]},
+				{"name":"models/gemini-3.8-flash-lite","supportedGenerationMethods":["generateContent"]},
+				{"name":"models/gemini-3.10-flash","supportedGenerationMethods":["embedContent"]},
+				{"name":"models/gemini-3.9-pro","supportedGenerationMethods":["generateContent"]}]}`))
+		case strings.Contains(r.URL.Path, "gemini-test:"):
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"code":404,"message":"This model is no longer available to new users.","status":"NOT_FOUND"}}`))
+		case strings.Contains(r.URL.Path, "gemini-3.8-flash:"):
+			w.Write([]byte(geminiOK(tree.Generated{Role: "ok"})))
+		default:
+			t.Errorf("unexpected %s", r.URL.Path)
+		}
+	})
+	out, err := g.Generate(context.Background(), "s", "u")
+	if err != nil || out.Role != "ok" || g.Name() != "gemini-3.8-flash" {
+		t.Fatalf("%+v %v model=%s calls=%v", out, err, g.Name(), calls)
+	}
+	// Второй запрос сразу идёт в новую модель.
+	calls = nil
+	if _, err := g.Generate(context.Background(), "s", "u"); err != nil || len(calls) != 1 {
+		t.Fatalf("%v %v", err, calls)
+	}
+}

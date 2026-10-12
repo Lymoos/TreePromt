@@ -8,7 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"prompttree/backend/internal/tree"
@@ -24,6 +28,7 @@ type Model interface {
 var ErrModelAuth = errors.New("Gemini rejected the API key")
 
 type Gemini struct {
+	mu      sync.Mutex
 	apiKey  string
 	model   string
 	baseURL string
@@ -43,7 +48,11 @@ func NewGemini(apiKey, model string) *Gemini {
 	}
 }
 
-func (g *Gemini) Name() string { return g.model }
+func (g *Gemini) Name() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.model
+}
 
 // WithBaseURL подменяет адрес API (имитация в тестах).
 func (g *Gemini) WithBaseURL(u string) *Gemini {
@@ -92,7 +101,9 @@ func (g *Gemini) GenerateJSON(ctx context.Context, system, user string, schema m
 			"responseSchema":   schema,
 		},
 	})
-	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", g.baseURL, g.model)
+	healed := false
+retry:
+	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", g.baseURL, g.Name())
 
 	var lastErr error
 	for attempt := 0; attempt <= g.retries; attempt++ {
@@ -122,6 +133,17 @@ func (g *Gemini) GenerateJSON(ctx context.Context, system, user string, schema m
 		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 			lastErr = fmt.Errorf("Gemini is busy (HTTP %d)", resp.StatusCode)
 			continue
+		case resp.StatusCode == http.StatusNotFound && !healed:
+			// Google выводит модели из обращения (12.10.2026: gemini-2.5-flash — «no longer available to new users»).
+			// Берём самую новую flash-модель, доступную этому ключу, и повторяем.
+			if next, err := g.newestFlash(ctx); err == nil && next != g.Name() {
+				g.mu.Lock()
+				g.model = next
+				g.mu.Unlock()
+				healed = true
+				goto retry
+			}
+			return nil, fmt.Errorf("Gemini model %s is not available (HTTP 404): set GEMINI_MODEL", g.Name())
 		case resp.StatusCode != http.StatusOK:
 			return nil, fmt.Errorf("Gemini returned HTTP %d", resp.StatusCode)
 		}
@@ -150,4 +172,65 @@ func parseGemini(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("Gemini stopped early: %s", c.FinishReason)
 	}
 	return []byte(text.String()), nil
+}
+
+var flashName = regexp.MustCompile(`^models/gemini-(\d+)(?:\.(\d+))?-flash$`)
+
+// newestFlash — самая новая модель вида gemini-X.Y-flash из списка, доступного ключу (generateContent).
+func (g *Gemini) newestFlash(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.baseURL+"/v1beta/models?pageSize=1000", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("x-goog-api-key", g.apiKey)
+	resp, err := g.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Gemini models list: HTTP %d", resp.StatusCode)
+	}
+	var list struct {
+		Models []struct {
+			Name    string   `json:"name"`
+			Methods []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&list); err != nil {
+		return "", err
+	}
+	type cand struct {
+		name         string
+		major, minor int
+	}
+	var cs []cand
+	for _, m := range list.Models {
+		p := flashName.FindStringSubmatch(m.Name)
+		if p == nil || !contains(m.Methods, "generateContent") {
+			continue
+		}
+		major, _ := strconv.Atoi(p[1])
+		minor, _ := strconv.Atoi(p[2])
+		cs = append(cs, cand{strings.TrimPrefix(m.Name, "models/"), major, minor})
+	}
+	if len(cs) == 0 {
+		return "", errors.New("no gemini-*-flash model is available for this key")
+	}
+	sort.Slice(cs, func(i, j int) bool {
+		if cs[i].major != cs[j].major {
+			return cs[i].major > cs[j].major
+		}
+		return cs[i].minor > cs[j].minor
+	})
+	return cs[0].name, nil
+}
+
+func contains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
 }

@@ -32,7 +32,7 @@ func FromEnv() (Config, error) {
 		AllowRegistration: os.Getenv("ALLOW_REGISTRATION") == "true",
 		TrustProxy:        os.Getenv("TRUST_PROXY") == "true",
 		GeminiAPIKey:      strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
-		GeminiModel:       envOr("GEMINI_MODEL", "gemini-2.5-flash"),
+		GeminiModel:       envOr("GEMINI_MODEL", "gemini-3.8-flash"),
 		AIDailyLimit:      200,
 		GeminiBaseURL:     os.Getenv("GEMINI_BASE_URL"),
 	}
