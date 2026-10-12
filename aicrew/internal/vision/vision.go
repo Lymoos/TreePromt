@@ -22,6 +22,7 @@ import (
 	"prompttree/aicrew/internal/api"
 	"prompttree/aicrew/internal/review"
 	"prompttree/aicrew/internal/runner"
+	"prompttree/aicrew/internal/verify"
 )
 
 const Role = "vision_qa"
@@ -77,14 +78,21 @@ func (v Vision) Review(ctx context.Context, role string, t *api.Task, workdir st
 		return skipped("no Flutter web build for this project"), nil
 	}
 	// 1. Веб-сборка в worktree (build/ в .gitignore Flutter-проекта; результат уже закоммичен).
-	res, err := v.R.Run(ctx, runner.Command{Exe: "docker", Timeout: 15 * time.Minute, Args: []string{"run", "--rm",
-		"--name", fmt.Sprintf("aicrew-vision-build-%s-%d", t.ID, t.Attempt), "-v", workdir + ":/work", "-w", "/work",
-		v.BuildImage, "flutter", "build", "web", "--release", "--no-web-resources-cdn"}})
+	// В worktree уже лежит .dart_tool/package_config.json от контейнера проверки, а кэша пакетов
+	// в новом контейнере нет: без явного pub get сборка «не находит» пакеты (живой прогон 12.10.2026).
+	// Поэтому pub get и сборка — в одном контейнере.
+	build := verify.Profile{Image: v.BuildImage, Steps: []verify.Step{
+		{Name: "flutter pub get", Kind: "build", Argv: []string{"flutter", "pub", "get"}},
+		{Name: "flutter build web", Kind: "build", Argv: []string{"flutter", "build", "web", "--release", "--no-web-resources-cdn"}},
+	}}
+	rep, err := verify.Verifier{R: v.R, DefaultImage: v.BuildImage}.Run(ctx, build, workdir,
+		fmt.Sprintf("aicrew-vision-build-%s-%d", t.ID, t.Attempt), 15*time.Minute)
 	if err != nil {
 		return api.Verdict{}, err
 	}
-	if res.ExitCode != 0 {
-		return api.Verdict{}, &agent.Failure{Class: "BUILD_FAILURE", Code: "web_build_failed", Message: tail(res.Stdout+res.Stderr, 1500)}
+	if !rep.Passed {
+		last := rep.Steps[len(rep.Steps)-1]
+		return api.Verdict{}, &agent.Failure{Class: "BUILD_FAILURE", Code: "web_build_failed", Message: tail(last.Output, 1500)}
 	}
 	// 2. Снимки.
 	out, err := os.MkdirTemp("", "aicrew-shots-")
@@ -92,7 +100,7 @@ func (v Vision) Review(ctx context.Context, role string, t *api.Task, workdir st
 		return api.Verdict{}, err
 	}
 	defer os.RemoveAll(out)
-	res, err = v.R.Run(ctx, runner.Command{Exe: "docker", Timeout: 5 * time.Minute, Args: []string{"run", "--rm",
+	res, err := v.R.Run(ctx, runner.Command{Exe: "docker", Timeout: 5 * time.Minute, Args: []string{"run", "--rm",
 		"--name", fmt.Sprintf("aicrew-vision-shot-%s-%d", t.ID, t.Attempt),
 		"-v", filepath.Join(workdir, "build", "web") + ":/web:ro", "-v", out + ":/out", v.Image, "/web", "/out"}})
 	if err != nil {

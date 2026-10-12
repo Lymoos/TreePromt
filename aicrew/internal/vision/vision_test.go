@@ -60,8 +60,15 @@ func TestVisionSendsScreenshotsAndParsesVerdict(t *testing.T) {
 	if got.Model != "qwen2.5vl:7b" || got.KeepAlive != 0 || len(got.Messages[0].Images) != 2 || !strings.Contains(got.Messages[0].Content, "<untrusted>") {
 		t.Fatalf("request: %+v", got)
 	}
-	if len(dock.calls) != 2 || !strings.Contains(strings.Join(dock.calls[0], " "), "flutter build web --release --no-web-resources-cdn") ||
-		!strings.Contains(strings.Join(dock.calls[1], " "), ":/web:ro") {
+	all := make([]string, len(dock.calls))
+	for i, c := range dock.calls {
+		all[i] = strings.Join(c, " ")
+	}
+	joined := strings.Join(all, "\n")
+	// pub get и сборка — в одном контейнере проверки (exec), затем снимки в образе vision.
+	if !strings.Contains(joined, "exec aicrew-vision-build-t1-1 flutter pub get") ||
+		!strings.Contains(joined, "exec aicrew-vision-build-t1-1 flutter build web --release --no-web-resources-cdn") ||
+		!strings.Contains(all[len(all)-1], ":/web:ro") {
 		t.Fatalf("docker: %v", dock.calls)
 	}
 }

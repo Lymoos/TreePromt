@@ -57,6 +57,7 @@ func TestFlutterMachineReport(t *testing.T) {
 		`{"test":{"id":3,"name":"adds a todo"},"type":"testStart"}`,
 		`{"testID":3,"result":"success","hidden":false,"skipped":false,"type":"testDone"}`,
 		`{"test":{"id":4,"name":"deletes a todo"},"type":"testStart"}`,
+		`{"testID":4,"messageType":"print","message":"══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞══ The following TestFailure was thrown: Expected: <Мои дела (2)>","type":"print"}`,
 		`{"testID":4,"error":"Expected: exactly one matching candidate\n  Actual: _TextWidgetFinder:<Found 0 widgets>","stackTrace":"package:flutter_test/src/widget_tester.dart 469:3\ntest/widget_test.dart 52:5","isFailure":true,"type":"error"}`,
 		`{"testID":4,"result":"failure","hidden":false,"skipped":false,"type":"testDone"}`,
 		`{"test":{"id":5,"name":"skipped one"},"type":"testStart"}`,
@@ -67,7 +68,8 @@ func TestFlutterMachineReport(t *testing.T) {
 	if r == nil || r.Total != 3 || r.Passed != 1 || r.Failed != 1 || r.Skipped != 1 {
 		t.Fatalf("%+v", r)
 	}
-	if len(r.Failures) != 1 || r.Failures[0].Name != "deletes a todo" || !strings.Contains(r.Failures[0].Message, "Found 0 widgets") {
+	if len(r.Failures) != 1 || r.Failures[0].Name != "deletes a todo" || !strings.Contains(r.Failures[0].Message, "Found 0 widgets") ||
+		!strings.Contains(r.Failures[0].Message, "EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK") {
 		t.Fatalf("failures: %+v", r.Failures)
 	}
 	if s := r.Summary(); !strings.Contains(s, "FAILED deletes a todo") || !strings.Contains(s, "widget_test.dart 52:5") {

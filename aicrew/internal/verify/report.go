@@ -47,14 +47,15 @@ func ParseFlutterMachine(out string) *TestReport {
 		Name string `json:"name"`
 	}
 	var ev struct {
-		Type   string `json:"type"`
-		Test   test   `json:"test"`
-		TestID int    `json:"testID"`
-		Result string `json:"result"`
-		Hidden bool   `json:"hidden"`
-		Skip   bool   `json:"skipped"`
-		Error  string `json:"error"`
-		Stack  string `json:"stackTrace"`
+		Type    string `json:"type"`
+		Test    test   `json:"test"`
+		TestID  int    `json:"testID"`
+		Result  string `json:"result"`
+		Hidden  bool   `json:"hidden"`
+		Skip    bool   `json:"skipped"`
+		Error   string `json:"error"`
+		Stack   string `json:"stackTrace"`
+		Message string `json:"message"`
 	}
 	names := map[int]string{}
 	errs := map[int]*strings.Builder{}
@@ -66,7 +67,7 @@ func ParseFlutterMachine(out string) *TestReport {
 		if !strings.HasPrefix(line, "{") {
 			continue
 		}
-		ev.Type, ev.Error, ev.Stack, ev.Result, ev.Hidden, ev.Skip = "", "", "", "", false, false
+		ev.Type, ev.Error, ev.Stack, ev.Result, ev.Hidden, ev.Skip, ev.Message = "", "", "", "", false, false, ""
 		if json.Unmarshal([]byte(line), &ev) != nil {
 			continue
 		}
@@ -74,11 +75,19 @@ func ParseFlutterMachine(out string) *TestReport {
 		case "testStart":
 			seen = true
 			names[ev.Test.ID] = ev.Test.Name
-		case "error":
+		case "error", "print":
+			// Исключения виджет-тестов Flutter печатает событиями print («EXCEPTION CAUGHT BY
+			// FLUTTER TEST FRAMEWORK»), а в error остаётся только «See exception logs above».
 			b := errs[ev.TestID]
 			if b == nil {
 				b = &strings.Builder{}
 				errs[ev.TestID] = b
+			}
+			if ev.Type == "print" {
+				if b.Len() < 6000 {
+					b.WriteString(ev.Message + "\n")
+				}
+				continue
 			}
 			b.WriteString(ev.Error + "\n" + firstLines(ev.Stack, 6) + "\n")
 		case "testDone":
