@@ -100,7 +100,8 @@ func newLocal(t *testing.T, replies ...string) (*Local, *fakeOllama, *fakeDocker
 		t.Fatal(err)
 	}
 	plenty := func() (sysmem.Status, error) { return sysmem.Status{Total: 32 << 30, Available: 20 << 30}, nil }
-	return &Local{R: fd, Image: "img", BaseURL: srv.URL, Model: "qwen", NumCtx: 32768, Memory: plenty}, fo, fd, dir
+	noGPU := func() uint64 { return 0 }
+	return &Local{R: fd, Image: "img", BaseURL: srv.URL, Model: "qwen", NumCtx: 32768, Memory: plenty, GPUFree: noGPU}, fo, fd, dir
 }
 
 func TestLocalAgentEditsFilesRunsChecksAndFinishes(t *testing.T) {
@@ -258,5 +259,20 @@ func TestLocalAgentNudgesWhenItOnlyTalks(t *testing.T) {
 	}
 	if fo.requests[0]["think"] != false {
 		t.Fatal("thinking must be off")
+	}
+}
+
+func TestRAMNeedCountsWhatFitsOnTheGPU(t *testing.T) {
+	const gib = 1 << 30
+	// qwen3:8b (5 ГБ) с окном 16k на свободных 7 ГБ видеопамяти: в RAM чуть больше гигабайта плюс запас 3 ГБ.
+	if got := RAMNeed(5*gib, 16384, 7*gib); got > 5*gib {
+		t.Fatalf("8B on GPU needs %.1f GB RAM", float64(got)/gib)
+	}
+	// qwen3-coder:30b (18.6 ГБ) с окном 32k — та самая конфигурация с синим экраном: больше 15 ГБ RAM.
+	if got := RAMNeed(186*gib/10, 32768, 7*gib); got < 15*gib {
+		t.Fatalf("30B needs %.1f GB RAM", float64(got)/gib)
+	}
+	if RAMNeed(5*gib, 16384, 0) != MemoryNeed(5*gib, 16384) {
+		t.Fatal("without a GPU everything goes to RAM")
 	}
 }

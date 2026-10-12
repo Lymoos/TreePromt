@@ -38,6 +38,8 @@ type Local struct {
 	Log     *slog.Logger // шаги агента в журнал службы: локальная модель медленная, видно, что она делает
 	// Memory — свободная память ПК; nil — sysmem.Read. Перед запуском модель должна влезать с запасом.
 	Memory func() (sysmem.Status, error)
+	// GPUFree — свободная видеопамять; nil — sysmem.GPUFree.
+	GPUFree func() uint64
 
 	mu      sync.Mutex
 	cancels map[string]context.CancelFunc
@@ -139,6 +141,16 @@ func MemoryNeed(size uint64, numCtx int) uint64 {
 	return size + uint64(numCtx)*kvBytesPerToken + memoryReserve
 }
 
+// RAMNeed — сколько из этого придётся на оперативную память, если gpuFree байт модели заберёт видеокарта.
+func RAMNeed(size uint64, numCtx int, gpuFree uint64) uint64 {
+	model := size + uint64(numCtx)*kvBytesPerToken
+	onGPU := gpuFree * 9 / 10
+	if onGPU > model {
+		onGPU = model
+	}
+	return model - onGPU + memoryReserve
+}
+
 // CheckMemory не даёт запустить модель, которая не влезает в свободную память: 12.10.2026
 // qwen3-coder:30b с окном 32k и Docker вместе довели ПК (32 ГБ) до синего экрана.
 func (l *Local) CheckMemory(ctx context.Context) error {
@@ -157,7 +169,11 @@ func (l *Local) CheckMemory(ctx context.Context) error {
 	if err != nil {
 		return nil // не узнали — не мешаем
 	}
-	if need := MemoryNeed(size, l.NumCtx); st.Available < need {
+	gpu := l.GPUFree
+	if gpu == nil {
+		gpu = sysmem.GPUFree
+	}
+	if need := RAMNeed(size, l.NumCtx, gpu()); st.Available < need {
 		return &Failure{Class: "ENVIRONMENT_FAILURE", Code: "not_enough_memory", Message: fmt.Sprintf(
 			"Junior (%s) needs about %.1f GB of free RAM, only %.1f GB is free: close heavy programs or choose a smaller model (aicrew-host set-junior)",
 			l.Model, gb(need), gb(st.Available))}
