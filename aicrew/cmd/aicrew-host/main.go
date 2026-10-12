@@ -469,7 +469,7 @@ func runHost(ctx context.Context, e *env) error {
 	if ollamaHas(ctx, e.cfg.OllamaURL, e.cfg.JuniorModel) {
 		// Свой исполнитель AiCrew: разговор с моделью ведёт служба через API Ollama, а не Claude Code.
 		junior = &agent.Local{R: run, Image: e.cfg.AgentImage, BaseURL: e.cfg.OllamaURL, Model: e.cfg.JuniorModel,
-			NumCtx: e.cfg.JuniorContext}
+			NumCtx: e.cfg.JuniorContext, Log: log}
 		executors = append(executors, manager.Option{Name: "junior", Description: "local small model (" + e.cfg.JuniorModel +
 			"): only mechanical work with an exact spec — renames, simple tests, docs, small edits"})
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ type Local struct {
 	NumCtx  int // окно контекста, токенов (options.num_ctx)
 	Network string
 	HTTP    *http.Client
+	Log     *slog.Logger // шаги агента в журнал службы: локальная модель медленная, видно, что она делает
 
 	mu      sync.Mutex
 	cancels map[string]context.CancelFunc
@@ -99,6 +101,9 @@ func (l *Local) Run(ctx context.Context, req Request) (Result, error) {
 		for _, c := range calls {
 			if c.Function.Name == "finish" {
 				return Result{Summary: argString(c.Function.Arguments, "summary"), Usage: usage}, nil
+			}
+			if l.Log != nil {
+				l.Log.Info("junior step", "task", req.TaskID, "turn", turn, "tool", c.Function.Name, "args", brief(c.Function.Arguments))
 			}
 			out := s.call(ctx, c.Function.Name, c.Function.Arguments)
 			msgs = append(msgs, chatMessage{Role: "tool", ToolName: c.Function.Name, Content: out})
@@ -587,4 +592,20 @@ func (s *localSession) stopContainer() {
 		return
 	}
 	_, _ = s.l.R.Run(context.Background(), runner.Command{Exe: "docker", Args: []string{"rm", "-f", s.container}, Timeout: 30 * time.Second})
+}
+
+// brief — аргументы инструмента для журнала: пути и команды целиком, длинный текст — только длина.
+func brief(args map[string]any) string {
+	var parts []string
+	for _, k := range []string{"path", "command", "pattern", "old_string", "content"} {
+		v, ok := args[k].(string)
+		if !ok {
+			continue
+		}
+		if k == "old_string" || k == "content" || len(v) > 120 {
+			v = fmt.Sprintf("<%d chars>", len(v))
+		}
+		parts = append(parts, k+"="+v)
+	}
+	return strings.Join(parts, " ")
 }
