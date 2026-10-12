@@ -44,6 +44,7 @@ import (
 	"prompttree/aicrew/internal/secrets"
 	"prompttree/aicrew/internal/secretscan"
 	"prompttree/aicrew/internal/skills"
+	"prompttree/aicrew/internal/sysmem"
 	"prompttree/aicrew/internal/verify"
 	"prompttree/aicrew/internal/vision"
 )
@@ -68,7 +69,7 @@ func usage() {
   add-repo           привязать локальный репозиторий: -project <id> -path <папка> [-name] [-branch] [-profile файл.json]
   run                брать и выполнять задачи, сливать проверенные в integration-ветку
   set-worker         окружение windows_user: пароль ai_worker (-user, -roblox, -clipboard)
-  set-junior         локальная модель Junior: -model qwen3-coder:30b -context 32768
+  set-junior         локальная модель Junior: -model qwen3:8b -context 16384
   set-skills         скиллы репозитория: -path <папка> -required a,b -forbidden c
   set-profile        профиль проверки репозитория: -path <папка> -profile файл.json ({"template":"flutter"})
   promote            перенести integration в основную ветку после проверки: -path <папка>`)
@@ -282,10 +283,13 @@ func dispatch(cmd string, args []string) error {
 	case "set-junior":
 		fs := flag.NewFlagSet("set-junior", flag.ExitOnError)
 		model := fs.String("model", e.cfg.JuniorModel, "модель Ollama (уже скачанная: ollama pull …)")
-		numCtx := fs.Int("context", 32768, "окно контекста, токенов")
+		numCtx := fs.Int("context", 16384, "окно контекста, токенов")
 		_ = fs.Parse(args)
 		if !ollamaHas(ctx, e.cfg.OllamaURL, *model) {
 			return fmt.Errorf("в Ollama нет модели %s — сначала: ollama pull %s", *model, *model)
+		}
+		if err := juniorFitsPC(ctx, &agent.Local{BaseURL: e.cfg.OllamaURL, Model: *model, NumCtx: *numCtx}); err != nil {
+			return err
 		}
 		e.cfg.JuniorModel, e.cfg.JuniorContext = *model, *numCtx
 		if err := config.Save(e.cfgPath, e.cfg); err != nil {
@@ -468,8 +472,15 @@ func runHost(ctx context.Context, e *env) error {
 	var junior agent.Provider
 	if ollamaHas(ctx, e.cfg.OllamaURL, e.cfg.JuniorModel) {
 		// Свой исполнитель AiCrew: разговор с моделью ведёт служба через API Ollama, а не Claude Code.
-		junior = &agent.Local{R: run, Image: e.cfg.AgentImage, BaseURL: e.cfg.OllamaURL, Model: e.cfg.JuniorModel,
+		local := &agent.Local{R: run, Image: e.cfg.AgentImage, BaseURL: e.cfg.OllamaURL, Model: e.cfg.JuniorModel,
 			NumCtx: e.cfg.JuniorContext, Log: log}
+		junior = local
+		if err := juniorFitsPC(ctx, local); err != nil {
+			log.Warn("Junior is off", "reason", err.Error())
+			junior = nil
+		}
+	}
+	if junior != nil {
 		executors = append(executors, manager.Option{Name: "junior", Description: "local small model (" + e.cfg.JuniorModel +
 			"): only mechanical work with an exact spec — renames, simple tests, docs, small edits"})
 	}
@@ -730,6 +741,24 @@ func findNearExe(configured, rel string) string {
 }
 
 // ollamaHas — Ollama отвечает и модель скачана.
+// juniorFitsPC — модель с окном контекста должна занимать не больше 60% памяти ПК, иначе вместе
+// с Docker и проверками ПК уходит в синий экран (12.10.2026: qwen3-coder:30b на 32 ГБ).
+func juniorFitsPC(ctx context.Context, l *agent.Local) error {
+	size, err := l.ModelSize(ctx)
+	if err != nil {
+		return err
+	}
+	st, err := sysmem.Read()
+	if err != nil {
+		return nil
+	}
+	if need := agent.MemoryNeed(size, l.NumCtx); float64(need) > 0.6*float64(st.Total) {
+		return fmt.Errorf("%s with context %d needs ~%d GB, this PC has %d GB: choose a smaller model (aicrew-host set-junior -model qwen3:8b)",
+			l.Model, l.NumCtx, need>>30, st.Total>>30)
+	}
+	return nil
+}
+
 func ollamaHas(ctx context.Context, base, model string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"prompttree/aicrew/internal/runner"
+	"prompttree/aicrew/internal/sysmem"
 )
 
 // fakeOllama отвечает заранее заданными сообщениями и запоминает запросы.
@@ -19,9 +20,24 @@ type fakeOllama struct {
 	mu       sync.Mutex
 	replies  []string // JSON поля message
 	requests []map[string]any
+	unloads  int
 }
 
 func (f *fakeOllama) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/api/tags":
+		w.Write([]byte(`{"models":[{"name":"qwen:latest","size":5000000000}]}`))
+		return
+	case "/api/ps":
+		w.Write([]byte(`{"models":[]}`))
+		return
+	case "/api/generate": // выгрузка модели
+		f.mu.Lock()
+		f.unloads++
+		f.mu.Unlock()
+		w.Write([]byte(`{}`))
+		return
+	}
 	var req map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	f.mu.Lock()
@@ -83,7 +99,8 @@ func newLocal(t *testing.T, replies ...string) (*Local, *fakeOllama, *fakeDocker
 	if err := os.WriteFile(filepath.Join(dir, "main.dart"), []byte("void main() {\r\n  print('old');\r\n}\r\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return &Local{R: fd, Image: "img", BaseURL: srv.URL, Model: "qwen", NumCtx: 32768}, fo, fd, dir
+	plenty := func() (sysmem.Status, error) { return sysmem.Status{Total: 32 << 30, Available: 20 << 30}, nil }
+	return &Local{R: fd, Image: "img", BaseURL: srv.URL, Model: "qwen", NumCtx: 32768, Memory: plenty}, fo, fd, dir
 }
 
 func TestLocalAgentEditsFilesRunsChecksAndFinishes(t *testing.T) {
@@ -201,5 +218,26 @@ func TestRepairToolCalls(t *testing.T) {
 	}
 	if c := RepairToolCalls("All done, the tests pass."); len(c) != 0 {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestLocalAgentRefusesWhenModelDoesNotFitInMemory(t *testing.T) {
+	l, fo, _, dir := newLocal(t, text("never asked"))
+	// 5 ГБ модели + 32k окна (~5 ГБ) + 3 ГБ запаса > 8 ГБ свободных: синего экрана не будет.
+	l.Memory = func() (sysmem.Status, error) { return sysmem.Status{Total: 32 << 30, Available: 8 << 30}, nil }
+	_, err := l.Run(context.Background(), Request{TaskID: "t", Attempt: 1, Workdir: dir, Prompt: "p"})
+	f, ok := err.(*Failure)
+	if !ok || f.Code != "not_enough_memory" || !strings.Contains(f.Message, "8.0 GB is free") {
+		t.Fatalf("%v", err)
+	}
+	if len(fo.requests) != 0 {
+		t.Fatal("the model must not be started")
+	}
+	l.Memory = func() (sysmem.Status, error) { return sysmem.Status{Total: 32 << 30, Available: 16 << 30}, nil }
+	if _, err := l.Run(context.Background(), Request{TaskID: "t", Attempt: 1, Workdir: dir, Prompt: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	if fo.unloads != 1 {
+		t.Fatalf("the model must be unloaded after the run, unloads=%d", fo.unloads)
 	}
 }

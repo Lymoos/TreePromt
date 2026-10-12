@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"prompttree/aicrew/internal/runner"
+	"prompttree/aicrew/internal/sysmem"
 )
 
 // Local — собственный исполнитель AiCrew для локальных моделей (Ollama). Разговор с моделью ведёт
@@ -35,6 +36,8 @@ type Local struct {
 	Network string
 	HTTP    *http.Client
 	Log     *slog.Logger // шаги агента в журнал службы: локальная модель медленная, видно, что она делает
+	// Memory — свободная память ПК; nil — sysmem.Read. Перед запуском модель должна влезать с запасом.
+	Memory func() (sysmem.Status, error)
 
 	mu      sync.Mutex
 	cancels map[string]context.CancelFunc
@@ -65,6 +68,11 @@ func (l *Local) Run(ctx context.Context, req Request) (Result, error) {
 	defer cancel()
 	l.track(name, cancel)
 	defer l.track(name, nil)
+
+	if err := l.CheckMemory(ctx); err != nil {
+		return Result{}, err
+	}
+	defer l.unload() // модель выгружается сразу: дальше проверки и Docker, им нужна память
 
 	s := &localSession{l: l, req: req, container: name}
 	defer s.stopContainer()
@@ -110,6 +118,120 @@ func (l *Local) Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 	return Result{Usage: usage}, &Failure{Class: "AGENT_ERROR", Code: "max_turns", Message: "agent hit the turn limit"}
+}
+
+// Память: веса модели + окно контекста (~160 КБ на токен у моделей 8–30B) + запас под Windows и Docker.
+const (
+	kvBytesPerToken = 160 << 10
+	memoryReserve   = 3 << 30
+)
+
+// MemoryNeed — сколько свободной памяти нужно модели размером size с окном numCtx.
+func MemoryNeed(size uint64, numCtx int) uint64 {
+	return size + uint64(numCtx)*kvBytesPerToken + memoryReserve
+}
+
+// CheckMemory не даёт запустить модель, которая не влезает в свободную память: 12.10.2026
+// qwen3-coder:30b с окном 32k и Docker вместе довели ПК (32 ГБ) до синего экрана.
+func (l *Local) CheckMemory(ctx context.Context) error {
+	if l.modelLoaded(ctx) {
+		return nil // уже в памяти — её место учтено
+	}
+	size, err := l.ModelSize(ctx)
+	if err != nil {
+		return &Failure{Class: "ENVIRONMENT_FAILURE", Code: "local_model", Message: err.Error()}
+	}
+	read := l.Memory
+	if read == nil {
+		read = sysmem.Read
+	}
+	st, err := read()
+	if err != nil {
+		return nil // не узнали — не мешаем
+	}
+	if need := MemoryNeed(size, l.NumCtx); st.Available < need {
+		return &Failure{Class: "ENVIRONMENT_FAILURE", Code: "not_enough_memory", Message: fmt.Sprintf(
+			"Junior (%s) needs about %.1f GB of free RAM, only %.1f GB is free: close heavy programs or choose a smaller model (aicrew-host set-junior)",
+			l.Model, gb(need), gb(st.Available))}
+	}
+	return nil
+}
+
+func gb(b uint64) float64 { return float64(b) / (1 << 30) }
+
+// ModelSize — размер модели в Ollama (байты).
+func (l *Local) ModelSize(ctx context.Context) (uint64, error) {
+	var tags struct {
+		Models []struct {
+			Name string `json:"name"`
+			Size uint64 `json:"size"`
+		} `json:"models"`
+	}
+	if err := l.get(ctx, "/api/tags", &tags); err != nil {
+		return 0, err
+	}
+	for _, m := range tags.Models {
+		if m.Name == l.Model || m.Name == l.Model+":latest" {
+			return m.Size, nil
+		}
+	}
+	return 0, fmt.Errorf("model %s is not in Ollama", l.Model)
+}
+
+func (l *Local) modelLoaded(ctx context.Context) bool {
+	var ps struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if l.get(ctx, "/api/ps", &ps) != nil {
+		return false
+	}
+	for _, m := range ps.Models {
+		if m.Name == l.Model || m.Name == l.Model+":latest" {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Local) get(ctx context.Context, path string, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(l.BaseURL, "/")+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := l.client().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ollama %s: HTTP %d", path, resp.StatusCode)
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
+}
+
+func (l *Local) client() *http.Client {
+	if l.HTTP != nil {
+		return l.HTTP
+	}
+	return http.DefaultClient
+}
+
+// unload — выгрузить модель из памяти (keep_alive 0).
+func (l *Local) unload() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	body, _ := json.Marshal(map[string]any{"model": l.Model, "keep_alive": 0})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(l.BaseURL, "/")+"/api/generate", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	if resp, err := l.client().Do(req); err == nil {
+		resp.Body.Close()
+	}
 }
 
 func (l *Local) Stop(ctx context.Context, taskID string, attempt int) error {
@@ -170,11 +292,7 @@ func (l *Local) chat(ctx context.Context, msgs []chatMessage, tools []map[string
 		return chatReply{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	hc := l.HTTP
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	resp, err := hc.Do(req)
+	resp, err := l.client().Do(req)
 	if err != nil {
 		return chatReply{}, err
 	}

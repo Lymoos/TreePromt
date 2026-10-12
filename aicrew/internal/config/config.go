@@ -69,8 +69,8 @@ func Defaults() Config {
 		ManagerModel:       "haiku",
 		OllamaURL:          "http://127.0.0.1:11434",
 		OllamaURLContainer: "http://host.docker.internal:11434",
-		JuniorModel:        "qwen3-coder:30b", // qwen2.5-coder писал вызовы инструментов текстом
-		JuniorContext:      32768,
+		JuniorModel:        "qwen3:8b", // целиком в видеокарте 8 ГБ; 30B на ПК с 32 ГБ довела до синего экрана
+		JuniorContext:      16384,
 		VisionModel:        "qwen2.5vl:7b",
 		WorkRoot:           `D:\aicrew-work`,
 		WorkerClaude:       `C:\Users\ai_worker\.local\bin\claude.exe`,
