@@ -124,19 +124,24 @@ class KanbanView extends ConsumerWidget {
       const _Legend(),
     ];
     if (wide) {
-      return ListView(padding: const EdgeInsets.fromLTRB(20, 12, 20, 32), children: [
-        ...header.map((w) => Padding(padding: const EdgeInsets.only(bottom: 12), child: w)),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            for (final col in KanbanCol.values)
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: SizedBox(width: 248, child: _Column(col: col, children: items[col]!)),
-              ),
-          ]),
-        ),
-      ]);
+      return LayoutBuilder(builder: (context, box) {
+        // Колонки делят ширину окна; на узком окне ПК — не уже 200 px и прокрутка вбок.
+        const gap = 12.0, side = 20.0;
+        final colWidth = ((box.maxWidth - 2 * side - 5 * gap) / 6).clamp(200.0, 420.0);
+        return ListView(padding: const EdgeInsets.fromLTRB(side, 12, side, 32), children: [
+          ...header.map((w) => Padding(padding: const EdgeInsets.only(bottom: 12), child: w)),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              for (final (i, col) in KanbanCol.values.indexed)
+                Padding(
+                  padding: EdgeInsets.only(right: i == 5 ? 0 : gap),
+                  child: SizedBox(width: colWidth, child: _Column(col: col, children: items[col]!)),
+                ),
+            ]),
+          ),
+        ]);
+      });
     }
     // Телефон: сверху то, что ждёт человека, и ошибки.
     const order = [KanbanCol.wait, KanbanCol.fail, KanbanCol.work, KanbanCol.check, KanbanCol.queued, KanbanCol.done];
@@ -492,7 +497,7 @@ class _TaskCardState extends ConsumerState<TaskCard> {
     final executor = t.executor == 'junior' ? 'Junior · Qwen' : 'Claude';
     final meta = [
       _statusText(t),
-      if (t.attempt > 0) 'попытка ${t.attempt}${t.maxAttempts > 0 ? '/${t.maxAttempts}' : ''}',
+      if (t.attempt > 0) 'попытка ${t.attempt}${t.maxAttempts >= t.attempt ? '/${t.maxAttempts}' : ''}',
       executor,
       if (t.mode != 'manual') t.mode == 'night' ? 'ночь' : 'полуавтомат',
     ].join(' · ');
@@ -513,10 +518,11 @@ class _TaskCardState extends ConsumerState<TaskCard> {
         if (a != null && !_rejecting)
           Wrap(spacing: 6, runSpacing: 6, children: [
             FilledButton(
+              style: _compactFilled,
               onPressed: () => _act(context, ref, (api) => api.resolveApproval(a.id, 'approve'), 'Слито в integration'),
               child: const Text('Слить'),
             ),
-            OutlinedButton(onPressed: () => setState(() => _rejecting = true), child: const Text('Вернуть с комментарием…')),
+            OutlinedButton(style: _compactOutlined, onPressed: () => setState(() => _rejecting = true), child: const Text('Вернуть с комментарием…')),
           ]),
         if (a != null && _rejecting)
           _CommentBox(
@@ -537,10 +543,12 @@ class _TaskCardState extends ConsumerState<TaskCard> {
           Wrap(spacing: 6, runSpacing: 6, children: [
             if (t.status == 'AWAITING_HUMAN')
               OutlinedButton(
+                style: _compactOutlined,
                 onPressed: () => _act(context, ref, (api) => api.retryTask(t.id), 'Добавлена попытка'),
                 child: const Text('Ещё попытка'),
               ),
             TextButton(
+              style: _compactText,
               onPressed: () => _act(context, ref, (api) => api.cancelTask(t.id), 'Задача отменена'),
               child: const Text('Отменить'),
             ),
@@ -623,6 +631,7 @@ class _PlanCardState extends ConsumerState<PlanCard> {
       if (a != null && !_rejecting)
         Wrap(spacing: 6, runSpacing: 6, children: [
           FilledButton(
+            style: _compactFilled,
             onPressed: _chosen.isEmpty
                 ? null
                 : () {
@@ -637,7 +646,7 @@ class _PlanCardState extends ConsumerState<PlanCard> {
                   },
             child: Text(_chosen.length == p.tasks.length ? 'Утвердить план' : 'Утвердить выбранные'),
           ),
-          OutlinedButton(onPressed: () => setState(() => _rejecting = true), child: const Text('Отклонить…')),
+          OutlinedButton(style: _compactOutlined, onPressed: () => setState(() => _rejecting = true), child: const Text('Отклонить…')),
         ]),
       if (a != null && _rejecting)
         _CommentBox(
@@ -679,8 +688,8 @@ class _CommentBox extends StatelessWidget {
       ),
       const SizedBox(height: 6),
       Wrap(spacing: 6, children: [
-        FilledButton(onPressed: onSend, child: Text(send)),
-        TextButton(onPressed: onCancel, child: const Text('Отмена')),
+        FilledButton(style: _compactFilled, onPressed: onSend, child: Text(send)),
+        TextButton(style: _compactText, onPressed: onCancel, child: const Text('Отмена')),
       ]),
     ]);
   }
@@ -703,6 +712,12 @@ class _Problem extends StatelessWidget {
         ),
       );
 }
+
+// Кнопки внутри карточек — компактнее кнопок экранов.
+const _compactPad = EdgeInsets.symmetric(horizontal: 12, vertical: 8);
+final _compactFilled = FilledButton.styleFrom(padding: _compactPad, minimumSize: const Size(0, 34), textStyle: ui(13, weight: FontWeight.w500));
+final _compactOutlined = OutlinedButton.styleFrom(padding: _compactPad, minimumSize: const Size(0, 34), textStyle: ui(13, weight: FontWeight.w500));
+final _compactText = TextButton.styleFrom(padding: _compactPad, minimumSize: const Size(0, 34), textStyle: ui(13, weight: FontWeight.w500));
 
 // ── действия ──
 
