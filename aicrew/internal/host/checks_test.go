@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"prompttree/aicrew/internal/agent"
 	"prompttree/aicrew/internal/api"
 	"prompttree/aicrew/internal/gitx"
+	"prompttree/aicrew/internal/secretscan"
 	"prompttree/aicrew/internal/verify"
 )
 
@@ -188,5 +190,61 @@ func TestNewContractNeedsApprovalEvenWithoutOne(t *testing.T) {
 	st, f := last(srv)
 	if st != "MERGEABLE" || len(f.ApprovalRequired) != 1 || f.ApprovalRequired[0] != "architecture.yaml" {
 		t.Fatalf("%s %+v", st, f)
+	}
+}
+
+// 7.6: секрет в изменениях исполнителя — коммита нет, задача к человеку, факты без значения.
+func TestSecretInChangesStopsBeforeCommit(t *testing.T) {
+	repo := gitRepo(t)
+	key := strings.Join([]string{"AIza", "SyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q"}, "")
+	srv := &fakeServer{}
+	h := newHost(t, srv, &fakeAgent{run: writesAll(map[string]string{"lib/config.dart": "const apiKey = '" + key + "';\n"})},
+		fakeVerifier{rep: verify.Report{Passed: true}})
+	h.Scanner = secretscan.New(nil)
+	h.Process(context.Background(), task(repo))
+	st, f := last(srv)
+	if st != "FAILED" || f.FailureClass != "SECRET_LEAK" || !strings.Contains(f.Reason, "lib/config.dart:1 (google_api_key)") {
+		t.Fatalf("%s %+v", st, f)
+	}
+	if strings.Contains(fmt.Sprint(f), key) {
+		t.Fatal("the secret itself must not reach the server")
+	}
+	if n := strings.TrimSpace(git(t, repo, "rev-list", "--all", "--count")); n != "1" {
+		t.Fatalf("nothing may be committed, commits: %s", n)
+	}
+}
+
+func TestFactsAndPromptsAreRedacted(t *testing.T) {
+	repo := gitRepo(t)
+	token := strings.Join([]string{"Mon", "day-", "Coffee-42-x"}, "")
+	srv := &fakeServer{}
+	ag := &fakeAgent{run: func(ctx context.Context, req agent.Request) (agent.Result, error) {
+		_, err := writes("a.dart", "x")(ctx, req)
+		return agent.Result{Summary: "used token " + token}, err
+	}}
+	h := newHost(t, srv, ag, fakeVerifier{rep: verify.Report{Passed: true}})
+	h.Scanner = secretscan.New(map[string]string{token: "claude_token"})
+	tk := task(repo)
+	tk.Prompt = "Сделай кнопку. Мой токен " + token
+	h.Process(context.Background(), tk)
+	if strings.Contains(ag.req.Prompt, token) || !strings.Contains(ag.req.Prompt, "[REDACTED:claude_token]") {
+		t.Fatalf("prompt: %q", ag.req.Prompt)
+	}
+	for _, f := range srv.facts {
+		if strings.Contains(fmt.Sprintf("%v", f.Details), token) {
+			t.Fatal("facts must be redacted")
+		}
+	}
+}
+
+func TestOwnersCommentIsTheFirstLesson(t *testing.T) {
+	class, code := "QA_REJECT", "human_rejected"
+	tclass := "TEST_FAILURE"
+	ls := lessons([]api.PreviousAttempt{
+		{Attempt: 1, FailureClass: &tclass, FailureCode: &code, Facts: json.RawMessage(`{}`)},
+		{Attempt: 2, FailureClass: &class, FailureCode: &code, Facts: json.RawMessage(`{"human_review":{"comment":"выбор приоритета — рядом с полем ввода"}}`)},
+	})
+	if len(ls) != 2 || !strings.Contains(ls[0], "REJECTED BY THE OWNER") || !strings.Contains(ls[0], "рядом с полем ввода") {
+		t.Fatalf("%v", ls)
 	}
 }

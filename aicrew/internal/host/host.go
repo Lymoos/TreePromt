@@ -17,11 +17,13 @@ import (
 
 	"prompttree/aicrew/internal/agent"
 	"prompttree/aicrew/internal/api"
+	"prompttree/aicrew/internal/audit"
 	"prompttree/aicrew/internal/contract"
 	"prompttree/aicrew/internal/gitx"
 	"prompttree/aicrew/internal/manager"
 	"prompttree/aicrew/internal/mcp"
 	"prompttree/aicrew/internal/review"
+	"prompttree/aicrew/internal/secretscan"
 	"prompttree/aicrew/internal/skills"
 	"prompttree/aicrew/internal/verify"
 )
@@ -52,7 +54,11 @@ type Host struct {
 	Planner Planner
 	Catalog manager.Catalog
 	// Windows — окружение windows_user (ai_worker); nil — не настроено.
-	Windows        *WindowsEnv
+	Windows *WindowsEnv
+	// Scanner — сканер секретов (7.6); nil — только в старых тестах.
+	Scanner *secretscan.Scanner
+	// Audit — очередь аудита (7.6); nil — без аудита (тесты).
+	Audit          *audit.Sink
 	WorkerID       string
 	Log            *slog.Logger
 	PollEvery      time.Duration
@@ -127,7 +133,7 @@ func (r *run) stopped() (user, lost bool) {
 }
 
 func (r *run) move(to string, f api.Facts) error {
-	_, err := r.h.API.Transition(context.WithoutCancel(r.ctx), r.t.ID, r.h.WorkerID, r.t.Attempt, to, f)
+	_, err := r.h.API.Transition(context.WithoutCancel(r.ctx), r.t.ID, r.h.WorkerID, r.t.Attempt, to, r.h.redactFacts(f))
 	if errors.Is(err, api.ErrNotOwner) {
 		r.mu.Lock()
 		r.lost = true
@@ -139,12 +145,15 @@ func (r *run) move(to string, f api.Facts) error {
 }
 
 func (h *Host) Process(parent context.Context, t *api.Task) {
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancel(audit.WithTask(parent, t.ID, t.Attempt))
 	defer cancel()
 	r := &run{h: h, t: t, ctx: ctx, cancel: cancel}
 	kind := t.Kind
 	if kind == "" {
 		kind = api.KindExecute
+	}
+	if h.Scanner != nil {
+		t.Prompt = h.Scanner.Redact(t.Prompt) // текст задачи уходит моделям только без секретов (ТЗ п. 12)
 	}
 	log := h.Log.With("task", t.ID, "attempt", t.Attempt, "kind", kind)
 	log.Info("task claimed", "title", t.Title)
@@ -256,6 +265,8 @@ func (r *run) pipeline() error {
 		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "mcp_profile_failed", Message: err.Error()}
 	}
 
+	h.Audit.Add(r.ctx, "attach", map[string]any{"executor": role, "skills": attached, "mcp_profile": mcpRes.Profile,
+		"mcp_servers": mcpRes.Servers, "env": t.ExecutionEnv})
 	res, err := ag.Run(r.ctx, req)
 	if err != nil {
 		return err
@@ -264,7 +275,12 @@ func (r *run) pipeline() error {
 		return errStopped
 	}
 
-	facts, err := h.Git.Autocommit(context.WithoutCancel(r.ctx), path, base, fmt.Sprintf("aicrew: %s (task %s, attempt %d)", t.Title, t.ID, t.Attempt))
+	facts, err := h.Git.Autocommit(context.WithoutCancel(r.ctx), path, base, fmt.Sprintf("aicrew: %s (task %s, attempt %d)", t.Title, t.ID, t.Attempt),
+		r.secretCheck)
+	var leak *failureWithDetails
+	if errors.As(err, &leak) {
+		return leak
+	}
 	if err != nil {
 		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "autocommit_failed", Message: err.Error()}
 	}
@@ -314,6 +330,9 @@ func (r *run) pipeline() error {
 	diff, err := h.Git.Diff(r.ctx, path, base, facts.ResultCommit)
 	if err != nil {
 		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "diff_failed", Message: err.Error()}
+	}
+	if h.Scanner != nil {
+		diff = h.Scanner.Redact(diff)
 	}
 	rf := review.Facts{Title: t.Title, Task: t.Prompt, Diff: diff, DiffStat: facts.DiffStat, ChangedFiles: facts.ChangedFiles,
 		Tests: rep.Tests(), Checks: rep.Steps, Contract: &con, AgentSummary: res.Summary}
@@ -560,7 +579,7 @@ func (r *run) finish(kind string, err error, log *slog.Logger) {
 		case errors.As(err, &fa):
 			f = api.Facts{FailureClass: fa.Class, FailureCode: fa.Code, Reason: fa.Message, RetryAfterSec: int(fa.RetryAfter.Seconds())}
 		}
-		status, terr := h.API.Transition(ctx, t.ID, h.WorkerID, t.Attempt, "FAILED", f)
+		status, terr := h.API.Transition(ctx, t.ID, h.WorkerID, t.Attempt, "FAILED", h.redactFacts(f))
 		log.Warn("task failed", "class", f.FailureClass, "code", f.FailureCode, "next", status, "err", terr)
 	}
 	if kind == api.KindRollback {
@@ -584,13 +603,20 @@ func lessons(prev []api.PreviousAttempt) []string {
 			line += " (" + *p.FailureCode + ")"
 		}
 		var facts struct {
-			Verification *verify.Report   `json:"verification"`
-			Conflicts    []string         `json:"conflicted_files"`
-			Stage        string           `json:"stage"`
-			Review       *api.Verdict     `json:"review"`
-			Contract     *contract.Result `json:"contract"`
+			Human        *struct{ Comment string } `json:"human_review"`
+			Verification *verify.Report            `json:"verification"`
+			Conflicts    []string                  `json:"conflicted_files"`
+			Stage        string                    `json:"stage"`
+			Review       *api.Verdict              `json:"review"`
+			Contract     *contract.Result          `json:"contract"`
 		}
 		if json.Unmarshal(p.Facts, &facts) == nil {
+			if facts.Human != nil && facts.Human.Comment != "" {
+				// Отказ владельца — главный урок: его комментарий исполнитель обязан выполнить.
+				out = append([]string{fmt.Sprintf("attempt %d was REJECTED BY THE OWNER, who wrote: %q — do exactly what the owner asks",
+					p.Attempt, facts.Human.Comment)}, out...)
+				continue
+			}
 			if len(facts.Conflicts) > 0 {
 				line += ": your result conflicted with other tasks merged meanwhile in " + strings.Join(facts.Conflicts, ", ") +
 					"; the worktree now starts from the updated code — redo the task on top of it and keep their changes"

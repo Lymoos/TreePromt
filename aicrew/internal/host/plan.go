@@ -2,7 +2,9 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -131,4 +133,49 @@ func (w *WindowsEnv) Contains(p string) bool {
 	}
 	root = strings.ToLower(filepath.Clean(root)) + string(filepath.Separator)
 	return strings.HasPrefix(strings.ToLower(filepath.Clean(abs))+string(filepath.Separator), root)
+}
+
+// secretCheck — изменения исполнителя до коммита: секрет — задача сразу к человеку (7.6).
+func (r *run) secretCheck(diff string) error {
+	if r.h.Scanner == nil {
+		return nil
+	}
+	found := r.h.Scanner.ScanDiff(diff)
+	if len(found) == 0 {
+		return nil
+	}
+	var where []string
+	for _, f := range found {
+		where = append(where, fmt.Sprintf("%s:%d (%s)", f.File, f.Line, f.Kind))
+	}
+	return &failureWithDetails{
+		Failure: agent.Failure{Class: "SECRET_LEAK", Code: "secret_in_changes",
+			Message: "the agent's changes contain secrets, nothing was committed: " + strings.Join(where, ", ")},
+		details: map[string]any{"secrets": found}}
+}
+
+// redactFacts — факты и причины уходят на сервер без секретов (значения заменяются на [REDACTED:вид]).
+func (h *Host) redactFacts(f api.Facts) api.Facts {
+	if h.Scanner == nil {
+		return f
+	}
+	f.Reason = h.Scanner.Redact(f.Reason)
+	if f.Details != nil {
+		b, err := json.Marshal(f.Details)
+		if err == nil {
+			red := h.Scanner.Redact(string(b))
+			if red != string(b) {
+				var v any
+				if json.Unmarshal([]byte(red), &v) == nil {
+					f.Details = v
+				}
+			}
+		}
+	}
+	if f.Review != nil {
+		v := *f.Review
+		v.Summary = h.Scanner.Redact(v.Summary)
+		f.Review = &v
+	}
+	return f
 }

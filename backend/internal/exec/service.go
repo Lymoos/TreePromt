@@ -453,6 +453,7 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		  AND h.environments @> to_jsonb(t.execution_env)
 		  AND h.capabilities @> t.required_capabilities
 		  AND h.executors @> to_jsonb(t.executor)
+		  AND `+pausedSQL+` AND `+nightStopSQL+`
 		  AND NOT EXISTS (
 			SELECT 1 FROM exec.task_dependencies d JOIN exec.tasks dt ON dt.id = d.depends_on_task_id
 			WHERE d.task_id = t.id AND dt.status <> 'DONE')
@@ -513,8 +514,10 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 // claimMergeJob берёт слияние или откат на репозитории хоста. Строка репозитория блокируется,
 // поэтому integration одного репозитория меняет строго одна задача за раз.
 func (s *Service) claimMergeJob(ctx context.Context, tx pgx.Tx, hostID, workerID uuid.UUID, now time.Time) (*ClaimedTask, error) {
+	// Репозиторий на паузе (инцидент) не сливает и не откатывает (7.6).
 	rows, err := tx.Query(ctx, `SELECT DISTINCT t.repository_id FROM exec.tasks t JOIN exec.repositories r ON r.id = t.repository_id
-		WHERE r.host_id = $1 AND t.status IN ('MERGE_QUEUED', 'ROLLBACK_QUEUED')`, hostID)
+		JOIN exec.hosts h ON h.id = r.host_id
+		WHERE r.host_id = $1 AND t.status IN ('MERGE_QUEUED', 'ROLLBACK_QUEUED') AND `+pausedSQL, hostID)
 	if err != nil {
 		return nil, err
 	}
@@ -717,10 +720,11 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 			return "", err
 		}
 	}
-	details := f.Details
+	details := redactJSON(f.Details) // второй рубеж: хост уже заменил секреты (7.6)
 	if len(details) == 0 {
 		details = json.RawMessage(`{}`)
 	}
+	f.Reason = Redact(f.Reason)
 	if f.Review != nil {
 		// Вердикт хранится и в фактах попытки: отказ и замечания видит следующая попытка.
 		var m map[string]any
@@ -796,6 +800,16 @@ func (s *Service) Transition(ctx context.Context, id Identity, taskID, workerID 
 				return "", err
 			}
 			final = StatusMergeQueued
+		} else if to == StatusMergeable {
+			if err := s.requestTaskApproval(ctx, tx, taskID, f); err != nil {
+				return "", err
+			}
+		}
+		if to == StatusMerged {
+			if _, err := tx.Exec(ctx, `UPDATE exec.repositories SET integration_failures = 0
+				WHERE id = (SELECT repository_id FROM exec.tasks WHERE id = $1)`, taskID); err != nil {
+				return "", err
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -861,11 +875,17 @@ func (s *Service) fail(ctx context.Context, tx pgx.Tx, taskID uuid.UUID, t lease
 	if err := event(ctx, tx, taskID, strp(StatusFailed), d.status, "system", "retry policy: "+class, &t.attempt); err != nil {
 		return "", err
 	}
+	if err := s.afterFailure(ctx, tx, taskID, class, reason); err != nil {
+		return "", err
+	}
 	return d.status, nil
 }
 
 // ReapExpired — сборщик: задачи с истёкшим lease (воркер умер, ПК выключили).
 func (s *Service) ReapExpired(ctx context.Context) (int, error) {
+	if err := s.expireApprovals(ctx); err != nil {
+		return 0, err
+	}
 	plans, err := s.reapPlans(ctx)
 	if err != nil {
 		return 0, err
@@ -1025,6 +1045,9 @@ func (s *Service) Cancel(ctx context.Context, userID, taskID uuid.UUID) (string,
 	if err := event(ctx, tx, taskID, &t.status, to, "user:"+userID.String(), "cancelled by user", nil); err != nil {
 		return "", err
 	}
+	if err := closeApprovals(ctx, tx, "task_id", taskID, ApprovalRejected, &userID, "task cancelled"); err != nil {
+		return "", err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
@@ -1088,6 +1111,9 @@ func (s *Service) Merge(ctx context.Context, userID, taskID uuid.UUID) error {
 		return fmt.Errorf("%w: %s → %s", ErrBadTransition, t.status, StatusMergeQueued)
 	}
 	if err := s.queueMerge(ctx, tx, taskID, "user:"+userID.String(), "merge approved"); err != nil {
+		return err
+	}
+	if err := closeApprovals(ctx, tx, "task_id", taskID, ApprovalApproved, &userID, ""); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

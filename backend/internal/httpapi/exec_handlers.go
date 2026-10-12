@@ -403,3 +403,129 @@ func (s *Server) handleExecSkillPolicy(w http.ResponseWriter, r *http.Request, i
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// ── 7.6: инциденты, аудит, запросы на решение ──
+
+func (s *Server) handleExecListIncidents(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	list, err := s.exec.ListIncidents(r.Context(), id.UserID, r.URL.Query().Get("open") != "")
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"incidents": list})
+}
+
+// handleExecStop — ручной рубильник: «Остановить всё» (без repository_id) или репозиторий.
+func (s *Server) handleExecStop(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	var req struct {
+		RepositoryID *uuid.UUID `json:"repository_id"`
+		Reason       string     `json:"reason"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	incident, err := s.exec.Stop(r.Context(), id.UserID, req.RepositoryID, req.Reason)
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": incident})
+}
+
+func (s *Server) handleExecResolveIncident(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	incidentID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Comment string `json:"comment"`
+	}
+	if r.ContentLength > 0 && !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.exec.ResolveIncident(r.Context(), id.UserID, incidentID, req.Comment); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleExecIntegrationRed(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	repoID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.exec.ReportIntegrationRed(r.Context(), id.UserID, repoID, req.Reason); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleExecWriteAudit(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	var req struct {
+		Entries []exec.AuditEntry     `json:"entries"`
+		Prompts []exec.PromptSnapshot `json:"prompts"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.exec.WriteAudit(r.Context(), execIdentity(id), req.Entries, req.Prompts); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleExecTaskAudit(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	taskID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	records, err := s.exec.TaskAudit(r.Context(), id.UserID, taskID)
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audit": records})
+}
+
+func (s *Server) handleExecPrompt(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	text, err := s.exec.PromptSnapshot(r.Context(), id.UserID, r.PathValue("hash"))
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"hash": r.PathValue("hash"), "text": text})
+}
+
+func (s *Server) handleExecListApprovals(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	list, err := s.exec.ListApprovals(r.Context(), id.UserID, r.URL.Query().Get("status"))
+	if err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approvals": list})
+}
+
+func (s *Server) handleExecResolveApproval(w http.ResponseWriter, r *http.Request, id core.Identity) {
+	approvalID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var d exec.Decision
+	if !decodeBody(w, r, &d) {
+		return
+	}
+	if err := s.exec.ResolveApproval(r.Context(), id.UserID, approvalID, d); err != nil {
+		s.execError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -113,9 +113,21 @@ type Facts struct {
 }
 
 // Autocommit фиксирует всё, что сделал агент, и собирает факты относительно base.
-func (g Git) Autocommit(ctx context.Context, worktree, base, message string) (Facts, error) {
+// check получает добавленные строки (git diff -U0 от base) до коммита: ошибка — коммита нет,
+// индекс сбрасывается (сканер секретов, 7.6).
+func (g Git) Autocommit(ctx context.Context, worktree, base, message string, check func(diff string) error) (Facts, error) {
 	if _, err := g.run(ctx, worktree, "add", "-A"); err != nil {
 		return Facts{}, err
+	}
+	if check != nil {
+		diff, err := g.run(ctx, worktree, "diff", "--cached", "-U0", "--no-color", "--no-ext-diff", base)
+		if err != nil {
+			return Facts{}, err
+		}
+		if err := check(diff); err != nil {
+			_, _ = g.run(ctx, worktree, "reset", "-q")
+			return Facts{}, err
+		}
 	}
 	status, err := g.run(ctx, worktree, "status", "--porcelain")
 	if err != nil {

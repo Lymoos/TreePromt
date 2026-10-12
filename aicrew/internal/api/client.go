@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"prompttree/aicrew/internal/audit"
 )
 
 var (
@@ -397,4 +399,24 @@ func (c *Client) SubmitPlan(ctx context.Context, planID, workerID string, attemp
 	_, err := c.authed(ctx, http.MethodPost, "/exec/plans/"+planID+"/result",
 		map[string]any{"worker_id": workerID, "attempt": attempt, "proposal": p, "failure": failure}, &out)
 	return out.Status, out.Error, ownerErr(err)
+}
+
+// ── аудит и инциденты (этап 7.6) ──
+
+// WriteAudit — пачка записей аудита и снимков промптов (audit.Sender).
+func (c *Client) WriteAudit(ctx context.Context, entries []audit.Entry, prompts []audit.Prompt) error {
+	if entries == nil {
+		entries = []audit.Entry{}
+	}
+	if prompts == nil {
+		prompts = []audit.Prompt{}
+	}
+	_, err := c.authed(ctx, http.MethodPost, "/exec/audit", map[string]any{"entries": entries, "prompts": prompts}, nil)
+	return err
+}
+
+// ReportIntegrationRed — integration не прошла проверку при переносе в main: инцидент, пауза.
+func (c *Client) ReportIntegrationRed(ctx context.Context, repoID, reason string) error {
+	_, err := c.authed(ctx, http.MethodPost, "/exec/repositories/"+repoID+"/integration-red", map[string]string{"reason": reason}, nil)
+	return err
 }

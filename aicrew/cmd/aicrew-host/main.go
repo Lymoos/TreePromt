@@ -32,6 +32,7 @@ import (
 
 	"prompttree/aicrew/internal/agent"
 	"prompttree/aicrew/internal/api"
+	"prompttree/aicrew/internal/audit"
 	"prompttree/aicrew/internal/config"
 	"prompttree/aicrew/internal/gitx"
 	"prompttree/aicrew/internal/host"
@@ -41,6 +42,7 @@ import (
 	"prompttree/aicrew/internal/runas"
 	"prompttree/aicrew/internal/runner"
 	"prompttree/aicrew/internal/secrets"
+	"prompttree/aicrew/internal/secretscan"
 	"prompttree/aicrew/internal/skills"
 	"prompttree/aicrew/internal/verify"
 	"prompttree/aicrew/internal/vision"
@@ -356,7 +358,11 @@ func runHost(ctx context.Context, e *env) error {
 	if err != nil {
 		return err
 	}
-	run := runner.New("git", "docker")
+	scanner := hostScanner(e)
+	cfgDir, _ := config.Dir()
+	sink := &audit.Sink{Dir: filepath.Join(cfgDir, "audit"), Scanner: scanner}
+	go sink.Run(ctx, e.client, 15*time.Second) // аудит досылается пачками; без сети ждёт на диске
+	run := audit.Runner{Inner: runner.New("git", "docker"), Sink: sink}
 	g := gitx.Git{R: run}
 	claude := &agent.ClaudeCode{R: run, Image: e.cfg.AgentImage, Model: e.cfg.ClaudeModel,
 		Token: func() (string, error) {
@@ -393,8 +399,8 @@ func runHost(ctx context.Context, e *env) error {
 			for _, p := range e.cfg.WorkerTools {
 				allowed[strings.ToLower(p)] = true
 			}
-			ra := runas.Runner{User: e.cfg.WorkerUser, WorkRoot: e.cfg.WorkRoot, Allowed: allowed,
-				Password: func() (string, error) { return e.sec.Get(secrets.WorkerPassword) }}
+			ra := audit.Runner{Sink: sink, Inner: runas.Runner{User: e.cfg.WorkerUser, WorkRoot: e.cfg.WorkRoot, Allowed: allowed,
+				Password: func() (string, error) { return e.sec.Get(secrets.WorkerPassword) }}}
 			windowsEnv = &host.WindowsEnv{WorkRoot: e.cfg.WorkRoot,
 				Agent:    &agent.ClaudeCode{R: ra, Model: e.cfg.ClaudeModel, NativeExe: e.cfg.WorkerClaude, Token: claude.Token},
 				Verifier: verify.Native{R: ra, Tools: e.cfg.WorkerTools}}
@@ -441,6 +447,8 @@ func runHost(ctx context.Context, e *env) error {
 		MCP:     mcpReg,
 		Planner: manager.Manager{Agent: claude, Model: e.cfg.ManagerModel},
 		Windows: windowsEnv,
+		Scanner: scanner,
+		Audit:   sink,
 		Catalog: manager.Catalog{Capabilities: caps, Environments: envs,
 			Executors: executors, Skills: manager.Options(skillOpts), MCPProfiles: manager.Options(mcpOpts)},
 	}
@@ -507,7 +515,12 @@ func promote(ctx context.Context, e *env, path string) error {
 		fmt.Printf("  %s: exit %d (%d с)\n", s.Name, s.ExitCode, s.Seconds)
 	}
 	if !rep.Passed {
-		return fmt.Errorf("%s не прошла проверку — %s не тронута", integ, repo.DefaultBranch)
+		// Integration красная — инцидент: AiCrew на паузе по этому репозиторию до «Возобновить» (7.6).
+		last := rep.Steps[len(rep.Steps)-1]
+		if err := e.client.ReportIntegrationRed(ctx, repo.ID, fmt.Sprintf("step %q exited with %d", last.Name, last.ExitCode)); err != nil {
+			fmt.Println("Не удалось сообщить об инциденте:", err)
+		}
+		return fmt.Errorf("%s не прошла проверку — %s не тронута, AiCrew по репозиторию на паузе", integ, repo.DefaultBranch)
 	}
 	from, to, err := g.FastForward(ctx, abs, repo.DefaultBranch, head)
 	if err != nil {
@@ -664,4 +677,19 @@ func containsAny(xs, ys []string) bool {
 		}
 	}
 	return false
+}
+
+// hostScanner — сканер секретов с точными значениями секретов этого хоста (самая надёжная проверка).
+func hostScanner(e *env) *secretscan.Scanner {
+	exact := map[string]string{}
+	for name, kind := range map[string]string{secrets.ClaudeToken: "claude_token", secrets.WorkerPassword: "worker_password",
+		secrets.RefreshToken: "server_refresh_token"} {
+		if v, err := e.sec.Get(name); err == nil && v != "" {
+			exact[v] = kind
+			if name == secrets.ClaudeToken {
+				exact[cleanToken(v)] = kind
+			}
+		}
+	}
+	return secretscan.New(exact)
 }

@@ -118,8 +118,8 @@ func (s *Service) claimPlan(ctx context.Context, tx pgx.Tx, hostID, workerID uui
 	t := ClaimedTask{Kind: KindPlan, PreviousAttempts: []AttemptFacts{}}
 	err := tx.QueryRow(ctx, `SELECT p.id, p.attempt, p.request,
 			r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
-		FROM exec.plans p JOIN exec.repositories r ON r.id = p.repository_id
-		WHERE p.status = 'QUEUED' AND r.host_id = $1
+		FROM exec.plans p JOIN exec.repositories r ON r.id = p.repository_id JOIN exec.hosts h ON h.id = r.host_id
+		WHERE p.status = 'QUEUED' AND r.host_id = $1 AND `+pausedSQL+`
 		ORDER BY p.created_at LIMIT 1 FOR UPDATE OF p SKIP LOCKED`, hostID).
 		Scan(&t.ID, &t.Attempt, &t.Prompt, &t.Repository.ID, &t.Repository.ProjectID, &t.Repository.HostID, &t.Repository.Name,
 			&t.Repository.LocalPath, &t.Repository.DefaultBranch, &t.Repository.IntegrationBranch, &t.Repository.VerificationProfile)
@@ -352,7 +352,11 @@ func (s *Service) SubmitPlan(ctx context.Context, id Identity, planID, workerID 
 			return "", "", err
 		}
 		// semi_auto и night: задачи создаются сразу; manual ждёт «Утвердить план» (решение 7.5/2).
-		if pl.mode != "manual" {
+		if pl.mode == "manual" {
+			if err := s.requestPlanApproval(ctx, tx, planID, pl.project, p); err != nil {
+				return "", "", err
+			}
+		} else {
 			if err := s.applyPlan(ctx, tx, planID, pl, p); err != nil {
 				return "", "", err
 			}
@@ -418,6 +422,9 @@ func (s *Service) ApprovePlan(ctx context.Context, userID, planID uuid.UUID) err
 	if err := s.applyPlan(ctx, tx, planID, pl, &p); err != nil {
 		return err
 	}
+	if err := closeApprovals(ctx, tx, "plan_id", planID, ApprovalApproved, &userID, ""); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
@@ -443,6 +450,9 @@ func (s *Service) RejectPlan(ctx context.Context, userID, planID uuid.UUID, reas
 	}
 	if _, err := tx.Exec(ctx, `UPDATE exec.plans SET status = 'REJECTED', error = $2, updated_at = now() WHERE id = $1`,
 		planID, clip(strings.TrimSpace("rejected by user: "+reason), 4000)); err != nil {
+		return err
+	}
+	if err := closeApprovals(ctx, tx, "plan_id", planID, ApprovalRejected, &userID, reason); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

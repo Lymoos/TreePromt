@@ -38,6 +38,7 @@ const (
 	ClassAuth        = "AUTH_ERROR"
 	ClassMerge       = "MERGE_CONFLICT"
 	ClassIntegration = "INTEGRATION_FAILURE" // результат слияния не прошёл проверку (7.3)
+	ClassSecret      = "SECRET_LEAK"         // секрет в изменениях исполнителя (7.6): сразу к человеку
 	ClassEnvironment = "ENVIRONMENT_FAILURE"
 	ClassQAReject    = "QA_REJECT"
 	ClassAgent       = "AGENT_ERROR"
@@ -45,7 +46,7 @@ const (
 
 func ValidClass(c string) bool {
 	switch c {
-	case ClassBuild, ClassTest, ClassTimeout, ClassNetwork, ClassRateLimit, ClassAuth, ClassMerge, ClassIntegration,
+	case ClassBuild, ClassTest, ClassTimeout, ClassNetwork, ClassRateLimit, ClassAuth, ClassMerge, ClassIntegration, ClassSecret,
 		ClassEnvironment, ClassQAReject, ClassAgent:
 		return true
 	}
@@ -100,7 +101,7 @@ const (
 
 func decideRetry(class string, attempt, maxAttempts int, retryAfter *time.Duration) retryDecision {
 	switch class {
-	case ClassAuth:
+	case ClassAuth, ClassSecret:
 		return retryDecision{status: StatusAwaitingHuman}
 	case ClassRateLimit:
 		d := defaultRateLimitWait
