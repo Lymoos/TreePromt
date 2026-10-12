@@ -9,6 +9,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,6 +69,7 @@ func usage() {
   add-repo           привязать локальный репозиторий: -project <id> -path <папка> [-name] [-branch] [-profile файл.json]
   run                брать и выполнять задачи, сливать проверенные в integration-ветку
   set-worker         окружение windows_user: пароль ai_worker (-user, -roblox, -clipboard)
+  set-junior         локальная модель Junior: -model qwen3-coder:30b -context 32768
   set-skills         скиллы репозитория: -path <папка> -required a,b -forbidden c
   set-profile        профиль проверки репозитория: -path <папка> -profile файл.json ({"template":"flutter"})
   promote            перенести integration в основную ветку после проверки: -path <папка>`)
@@ -278,6 +280,25 @@ func dispatch(cmd string, args []string) error {
 	case "run":
 		return runHost(ctx, e)
 
+	case "set-junior":
+		fs := flag.NewFlagSet("set-junior", flag.ExitOnError)
+		model := fs.String("model", e.cfg.JuniorModel, "модель Ollama (уже скачанная: ollama pull …)")
+		numCtx := fs.Int("context", 32768, "окно контекста, токенов")
+		_ = fs.Parse(args)
+		if !ollamaHas(ctx, e.cfg.OllamaURL, *model) {
+			return fmt.Errorf("в Ollama нет модели %s — сначала: ollama pull %s", *model, *model)
+		}
+		name, err := ensureContextModel(ctx, e.cfg.OllamaURL, *model, *numCtx)
+		if err != nil {
+			return err
+		}
+		e.cfg.JuniorModel, e.cfg.JuniorContext = *model, *numCtx
+		if err := config.Save(e.cfgPath, e.cfg); err != nil {
+			return err
+		}
+		fmt.Printf("Junior: %s, контекст %d (в Ollama — %s). Перезапустите службу.\n", *model, *numCtx, name)
+		return nil
+
 	case "set-worker":
 		// Окружение windows_user: пользователь ai_worker (создаёт владелец скриптом aicrew/setup).
 		fs := flag.NewFlagSet("set-worker", flag.ExitOnError)
@@ -451,7 +472,11 @@ func runHost(ctx context.Context, e *env) error {
 	executors := []manager.Option{{Name: "claude", Description: "Claude Code (Sonnet): any coding task, required for complex or architectural work"}}
 	var junior agent.Provider
 	if ollamaHas(ctx, e.cfg.OllamaURL, e.cfg.JuniorModel) {
-		junior = &agent.ClaudeCode{R: run, Image: e.cfg.AgentImage, Model: e.cfg.JuniorModel, LocalBaseURL: e.cfg.OllamaURLContainer}
+		model, err := ensureContextModel(ctx, e.cfg.OllamaURL, e.cfg.JuniorModel, e.cfg.JuniorContext)
+		if err != nil {
+			return fmt.Errorf("Junior: %w", err)
+		}
+		junior = &agent.ClaudeCode{R: run, Image: e.cfg.AgentImage, Model: model, LocalBaseURL: e.cfg.OllamaURLContainer}
 		executors = append(executors, manager.Option{Name: "junior", Description: "local small model (" + e.cfg.JuniorModel +
 			"): only mechanical work with an exact spec — renames, simple tests, docs, small edits"})
 	}
@@ -712,6 +737,34 @@ func findNearExe(configured, rel string) string {
 }
 
 // ollamaHas — Ollama отвечает и модель скачана.
+// ensureContextModel — вариант модели в Ollama с заданным окном контекста (num_ctx): через
+// Anthropic-совместимый API Ollama его не передать, а окна по умолчанию Claude Code не хватает.
+// Создаётся один раз (веса общие с исходной моделью), дальше просто используется.
+func ensureContextModel(ctx context.Context, base, model string, numCtx int) (string, error) {
+	if numCtx <= 0 {
+		return model, nil
+	}
+	name := strings.NewReplacer(":", "-", "/", "-").Replace(model) + fmt.Sprintf("-ctx%dk", numCtx/1024)
+	if ollamaHas(ctx, base, name) || ollamaHas(ctx, base, name+":latest") {
+		return name, nil
+	}
+	body, _ := json.Marshal(map[string]any{"model": name, "from": model, "stream": false,
+		"parameters": map[string]any{"num_ctx": numCtx}})
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(cctx, http.MethodPost, strings.TrimRight(base, "/")+"/api/create", bytes.NewReader(body))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+		return "", fmt.Errorf("ollama create %s: HTTP %d %s", name, resp.StatusCode, b)
+	}
+	return name, nil
+}
+
 func ollamaHas(ctx context.Context, base, model string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

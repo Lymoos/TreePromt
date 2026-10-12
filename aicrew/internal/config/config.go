@@ -27,6 +27,9 @@ type Config struct {
 	OllamaURL          string `json:"ollama_url"`           // для хоста
 	OllamaURLContainer string `json:"ollama_url_container"` // для контейнера исполнителя
 	JuniorModel        string `json:"junior_model"`
+	// Окно контекста Junior: системный промпт Claude Code ~18k токенов, а Ollama по умолчанию даёт 4k.
+	// Служба создаёт в Ollama вариант модели с этим num_ctx (см. ensureContextModel).
+	JuniorContext int `json:"junior_context"`
 	// Окружение windows_user (7.5b): пользователь Windows без прав администратора и его рабочая папка.
 	WorkerUser   string            `json:"worker_user"`   // ai_worker; пусто — окружение выключено
 	WorkRoot     string            `json:"work_root"`     // D:\aicrew-work — репозитории Roblox лежат здесь
@@ -67,7 +70,8 @@ func Defaults() Config {
 		ManagerModel:       "haiku",
 		OllamaURL:          "http://127.0.0.1:11434",
 		OllamaURLContainer: "http://host.docker.internal:11434",
-		JuniorModel:        "qwen2.5-coder:7b",
+		JuniorModel:        "qwen3-coder:30b", // qwen2.5-coder писал вызовы инструментов текстом
+		JuniorContext:      32768,
 		VisionModel:        "qwen2.5vl:7b",
 		WorkRoot:           `D:\aicrew-work`,
 		WorkerClaude:       `C:\Users\ai_worker\.local\bin\claude.exe`,
