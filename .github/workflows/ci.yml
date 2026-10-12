@@ -101,6 +101,7 @@ jobs:
         with:
           context: backend
           push: true
+          build-args: VERSION=${{ github.sha }}
           tags: |
             ghcr.io/lymoos/treepromt-backend:latest
             ghcr.io/lymoos/treepromt-backend:${{ github.sha }}

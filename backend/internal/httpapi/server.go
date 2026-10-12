@@ -33,6 +33,10 @@ type Server struct {
 	limiter        *ipLimiter
 }
 
+// Version — коммит, из которого собран сервер (-ldflags "-X …/httpapi.Version=<sha>" в Dockerfile).
+// Отдаётся в /healthz, чтобы после автодеплоя было видно, какая версия работает.
+var Version = "dev"
+
 type Options struct {
 	AllowedOrigins []string
 	TrustProxy     bool
@@ -47,7 +51,7 @@ func New(auth *core.AuthService, tokens *core.TokenIssuer, treeSvc *tree.Service
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": Version})
 	})
 	mux.HandleFunc("POST /api/v1/auth/register", s.limited(s.handleRegister))
 	mux.HandleFunc("POST /api/v1/auth/login", s.limited(s.handleLogin))
