@@ -9,7 +9,7 @@ ENV="$DIR/.env"
 [ -f "$ENV" ] || { echo "Нет $ENV — сначала install.sh" >&2; exit 1; }
 
 IFS= read -r KEY || true
-KEY=$(printf '%s' "$KEY" | tr -d '\r\n\t ')
+KEY=$(printf '%s' "$KEY" | sed 's/^\xEF\xBB\xBF//' | tr -d '\r\n\t ') # PowerShell 5.1 ставит BOM перед текстом
 [[ "$KEY" =~ ^[A-Za-z0-9._-]{20,200}$ ]] || { echo "Это не похоже на ключ Google AI Studio." >&2; exit 2; }
 
 # Проверка у Google до сохранения: ключ в заголовке, не в адресе.
