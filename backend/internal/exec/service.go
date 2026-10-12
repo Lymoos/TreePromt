@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -300,6 +301,20 @@ func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) 
 	}
 	if err := requireProjectWrite(ctx, tx, userID, repoProject); err != nil {
 		return uuid.Nil, err
+	}
+	// Обязательные скиллы репозитория подключаются и к задачам без Manager'а (политика скиллов, ТЗ п. 10.2).
+	var policy []byte
+	if err := tx.QueryRow(ctx, `SELECT skill_policy FROM exec.repositories WHERE id = $1`, in.RepositoryID).Scan(&policy); err != nil {
+		return uuid.Nil, err
+	}
+	var pol struct {
+		Required []string `json:"required"`
+	}
+	_ = json.Unmarshal(policy, &pol)
+	for _, sk := range pol.Required {
+		if !slices.Contains(in.RequiredSkills, sk) {
+			in.RequiredSkills = append(in.RequiredSkills, sk)
+		}
 	}
 	id, err := insertTask(ctx, tx, userID, repoProject, in)
 	if err != nil {

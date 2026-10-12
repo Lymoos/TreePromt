@@ -207,3 +207,14 @@ func TestSkillPolicyAppliesToPlans(t *testing.T) {
 		t.Fatalf("required skill must be attached: %+v", task)
 	}
 }
+
+func TestRequiredSkillsAttachToDirectTasks(t *testing.T) {
+	f := newFx(t)
+	if err := f.svc.SetSkillPolicy(f.ctx, f.user, f.repo, []string{"testing-strategy"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.task(func(n *NewTask) { n.RequiredSkills = []string{"dart-clean-code"} })
+	if c := f.claim(); c == nil || strings.Join(c.RequiredSkills, ",") != "dart-clean-code,testing-strategy" {
+		t.Fatalf("%+v", c)
+	}
+}

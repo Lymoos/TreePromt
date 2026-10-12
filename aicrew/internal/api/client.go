@@ -420,3 +420,16 @@ func (c *Client) ReportIntegrationRed(ctx context.Context, repoID, reason string
 	_, err := c.authed(ctx, http.MethodPost, "/exec/repositories/"+repoID+"/integration-red", map[string]string{"reason": reason}, nil)
 	return err
 }
+
+// SetSkillPolicy — обязательные и запрещённые скиллы репозитория (ТЗ п. 10.2).
+func (c *Client) SetSkillPolicy(ctx context.Context, repoID string, required, forbidden []string) error {
+	if required == nil {
+		required = []string{}
+	}
+	if forbidden == nil {
+		forbidden = []string{}
+	}
+	_, err := c.authed(ctx, http.MethodPut, "/exec/repositories/"+repoID+"/skill-policy",
+		map[string]any{"required": required, "forbidden": forbidden}, nil)
+	return err
+}

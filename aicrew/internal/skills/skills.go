@@ -25,6 +25,8 @@ type Skill struct {
 	Roles       []string `yaml:"roles" json:"roles,omitempty"`
 	Projects    []string `yaml:"projects" json:"projects,omitempty"`
 	Version     string   `yaml:"version" json:"version,omitempty"`
+	// License — для скиллов из чужих каталогов (условия — в LICENSE.txt рядом).
+	License string `yaml:"license" json:"license,omitempty"`
 
 	Dir  string `yaml:"-" json:"-"`
 	Hash string `yaml:"-" json:"hash"`

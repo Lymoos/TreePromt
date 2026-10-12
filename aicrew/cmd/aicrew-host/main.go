@@ -68,6 +68,7 @@ func usage() {
   add-repo           привязать локальный репозиторий: -project <id> -path <папка> [-name] [-branch] [-profile файл.json]
   run                брать и выполнять задачи, сливать проверенные в integration-ветку
   set-worker         окружение windows_user: пароль ai_worker (-user, -roblox, -clipboard)
+  set-skills         скиллы репозитория: -path <папка> -required a,b -forbidden c
   set-profile        профиль проверки репозитория: -path <папка> -profile файл.json ({"template":"flutter"})
   promote            перенести integration в основную ветку после проверки: -path <папка>`)
 }
@@ -305,6 +306,42 @@ func dispatch(cmd string, args []string) error {
 		}
 		fmt.Printf("Окружение windows_user: %s, рабочая папка %s, Roblox Studio: %v. Пароль зашифрован DPAPI.\n",
 			*user, e.cfg.WorkRoot, *roblox)
+		return nil
+
+	case "set-skills":
+		fs := flag.NewFlagSet("set-skills", flag.ExitOnError)
+		path := fs.String("path", "", "папка репозитория")
+		required := fs.String("required", "", "обязательные скиллы через запятую")
+		forbidden := fs.String("forbidden", "", "запрещённые скиллы через запятую")
+		_ = fs.Parse(args)
+		if e.client == nil {
+			return api.ErrAuthRequired
+		}
+		reg, err := skills.Load(findNearExe(e.cfg.SkillsDir, "skills"))
+		if err != nil {
+			return err
+		}
+		split := func(v string) []string {
+			var out []string
+			for _, x := range strings.Split(v, ",") {
+				if x = strings.TrimSpace(x); x != "" {
+					if _, ok := reg.Get(x); !ok {
+						fmt.Printf("Внимание: скилла %q нет в каталоге этого ПК.\n", x)
+					}
+					out = append(out, x)
+				}
+			}
+			return out
+		}
+		repo, err := findRepo(ctx, e, *path)
+		if err != nil {
+			return err
+		}
+		req, forb := split(*required), split(*forbidden)
+		if err := e.client.SetSkillPolicy(ctx, repo.ID, req, forb); err != nil {
+			return err
+		}
+		fmt.Printf("Скиллы %s: обязательные %v, запрещённые %v.\n", repo.Name, req, forb)
 		return nil
 
 	case "set-profile":
