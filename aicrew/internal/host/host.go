@@ -290,7 +290,9 @@ func (r *run) pipeline() error {
 func (r *run) checkContract(path, base string, changed []string) (contract.Result, error) {
 	raw, ok := r.h.Git.ShowFile(r.ctx, path, base, contract.FileName)
 	if !ok {
-		return contract.Result{}, nil // контракта нет — шаг пропускается, отметка в фактах (present: false)
+		// Контракта нет — правила модулей пропускаются (present: false), но базовые
+		// защищённые пути, включая появление самого контракта, требуют одобрения.
+		return contract.CheckWithout(changed), nil
 	}
 	c, err := contract.Parse(raw)
 	if err != nil {

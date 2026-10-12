@@ -179,3 +179,14 @@ func TestAgentIsToldWhichChecksWillRun(t *testing.T) {
 		t.Fatal("prompt must list the checks")
 	}
 }
+
+// Живой прогон 10.10.2026: задача, создающая architecture.yaml, не была помечена — контракта
+// в base ещё не было. Базовые защищённые пути действуют и без контракта.
+func TestNewContractNeedsApprovalEvenWithoutOne(t *testing.T) {
+	repo := gitRepo(t)
+	srv, _ := runTask(t, repo, map[string]string{"architecture.yaml": sandboxContract, "lib/a.dart": "x"}, nil, nil)
+	st, f := last(srv)
+	if st != "MERGEABLE" || len(f.ApprovalRequired) != 1 || f.ApprovalRequired[0] != "architecture.yaml" {
+		t.Fatalf("%s %+v", st, f)
+	}
+}

@@ -180,6 +180,26 @@ func DetectProject(read func(string) ([]byte, bool)) Project {
 	return p
 }
 
+// AlwaysProtected — изменения, которые требуют одобрения человека всегда, даже без контракта
+// (ТЗ п. 13: новая зависимость, схема БД, сам контракт; профиль проверки).
+var AlwaysProtected = []string{
+	FileName, "aicrew-profile.json",
+	"pubspec.yaml", "**/pubspec.yaml", "go.mod", "**/go.mod", "package.json", "**/package.json",
+	"**/migrations/**",
+}
+
+// CheckWithout — проверка, когда в base_commit контракта нет: только базовые защищённые пути.
+func CheckWithout(changed []string) Result {
+	var res Result
+	for _, f := range changed {
+		f = path.Clean(strings.ReplaceAll(f, `\`, "/"))
+		if matchAny(AlwaysProtected, f) {
+			res.ApprovalRequired = append(res.ApprovalRequired, f)
+		}
+	}
+	return res
+}
+
 // Check проверяет изменённые файлы. read возвращает содержимое файла результата (false — файл удалён).
 func (c *Contract) Check(changed []string, read func(string) ([]byte, bool), proj Project) Result {
 	res := Result{Present: true}
@@ -189,7 +209,7 @@ func (c *Contract) Check(changed []string, read func(string) ([]byte, bool), pro
 			res.Violations = append(res.Violations, Violation{File: f, Rule: "readonly_path", Detail: "agents must not modify this path"})
 			continue
 		}
-		if matchAny(c.ProtectedPaths, f) {
+		if matchAny(c.ProtectedPaths, f) || matchAny(AlwaysProtected, f) {
 			res.ApprovalRequired = append(res.ApprovalRequired, f)
 		}
 		data, ok := read(f)
