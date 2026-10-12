@@ -42,6 +42,7 @@ import (
 	"prompttree/aicrew/internal/secrets"
 	"prompttree/aicrew/internal/skills"
 	"prompttree/aicrew/internal/verify"
+	"prompttree/aicrew/internal/vision"
 )
 
 func main() {
@@ -343,6 +344,11 @@ func runHost(ctx context.Context, e *env) error {
 		executors = append(executors, manager.Option{Name: "junior", Description: "local small model (" + e.cfg.JuniorModel +
 			"): only mechanical work with an exact spec — renames, simple tests, docs, small edits"})
 	}
+	var visionQA review.Reviewer
+	if ollamaHas(ctx, e.cfg.OllamaURL, e.cfg.VisionModel) {
+		visionQA = vision.Vision{R: run, BuildImage: e.cfg.AgentImage, Image: "aicrew-vision:local",
+			OllamaURL: e.cfg.OllamaURL, Model: e.cfg.VisionModel}
+	}
 	reg := api.Registries{Skills: skillReg.Names(), MCPProfiles: mcpReg.ProfileNames()}
 	for _, x := range executors {
 		reg.Executors = append(reg.Executors, x.Name)
@@ -373,6 +379,7 @@ func runHost(ctx context.Context, e *env) error {
 			logic: review.Chain{Primary: review.Server{API: e.client, WorkerID: workerID},
 				Fallback: review.Claude{Agent: claude, Model: e.cfg.ReviewModel}},
 			techLead: review.Claude{Agent: claude, Model: e.cfg.TechLeadModel},
+			vision:   visionQA,
 		},
 		Junior:  junior,
 		Skills:  skillReg,
@@ -398,7 +405,7 @@ func runHost(ctx context.Context, e *env) error {
 		return err
 	}
 	log.Info("aicrew-host started", "host", h.ID, "worker", workerID, "repositories", len(paths), "orphans_removed", len(removed),
-		"skills", len(reg.Skills), "mcp_profiles", reg.MCPProfiles, "executors", reg.Executors)
+		"skills", len(reg.Skills), "mcp_profiles", reg.MCPProfiles, "executors", reg.Executors, "vision_qa", visionQA != nil)
 	return hst.Run(ctx)
 }
 
@@ -531,12 +538,19 @@ func findRepo(ctx context.Context, e *env, path string) (*api.Repository, error)
 
 // reviewers — Logic QA для всех задач, Tech Lead — для задач с пометкой (решение 7.4/4).
 type reviewers struct {
-	logic, techLead review.Reviewer
+	logic, techLead, vision review.Reviewer
 }
 
 func (r reviewers) Review(ctx context.Context, role string, t *api.Task, workdir string, f review.Facts) (api.Verdict, error) {
-	if role == review.RoleTechLead {
+	switch role {
+	case review.RoleTechLead:
 		return r.techLead.Review(ctx, role, t, workdir, f)
+	case vision.Role:
+		if r.vision == nil {
+			return api.Verdict{Verdict: "approve", Issues: []api.Issue{}, Summary: "vision QA skipped: no local vision model on this host",
+				Reviewer: vision.Role + ":skipped"}, nil
+		}
+		return r.vision.Review(ctx, role, t, workdir, f)
 	}
 	return r.logic.Review(ctx, role, t, workdir, f)
 }

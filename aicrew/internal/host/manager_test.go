@@ -179,3 +179,12 @@ func TestJuniorTasksGoToTheLocalModel(t *testing.T) {
 		t.Fatalf("%+v", f)
 	}
 }
+
+func TestTouchesUIAddsVisionQA(t *testing.T) {
+	repo := gitRepo(t)
+	rv := &fakeReviewer{}
+	srv, _ := runTask(t, repo, map[string]string{"lib/a.dart": "x"}, rv, func(tk *api.Task) { tk.TouchesUI = true })
+	if st, _ := last(srv); st != "MERGEABLE" || strings.Join(rv.roles, ",") != "logic_qa,vision_qa" {
+		t.Fatalf("%s %v", st, rv.roles)
+	}
+}

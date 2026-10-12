@@ -308,6 +308,9 @@ func (r *run) pipeline() error {
 	if t.ReviewLevel == "tech_lead" {
 		roles = append(roles, review.RoleTechLead)
 	}
+	if t.TouchesUI {
+		roles = append(roles, RoleVisionQA) // снимки экрана смотрит Qwen-VL (7.5b)
+	}
 	var verdicts []api.Verdict
 	for _, role := range roles {
 		v, err := r.review(role, path, rf)
@@ -320,6 +323,9 @@ func (r *run) pipeline() error {
 	return r.move("MERGEABLE", api.Facts{Review: &final, ApprovalRequired: con.ApprovalRequired,
 		Details: map[string]any{"reviews": verdicts}})
 }
+
+// RoleVisionQA — Vision QA для задач с touches_ui (vision.Role).
+const RoleVisionQA = "vision_qa"
 
 // checkContract проверяет изменённые файлы по architecture.yaml из base_commit.
 func (r *run) checkContract(path, base string, changed []string) (contract.Result, error) {
