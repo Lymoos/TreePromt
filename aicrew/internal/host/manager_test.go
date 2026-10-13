@@ -163,9 +163,13 @@ func TestJuniorTasksGoToTheLocalModel(t *testing.T) {
 	h.Junior = junior
 	tk := task(repo)
 	tk.Executor = "junior"
+	tk.Contract = &api.Contract{Files: []string{"b"}, Tests: []string{"b"}}
 	h.Process(context.Background(), tk)
 	if junior.req.Role != "junior" || claude.req.TaskID != "" {
 		t.Fatal("junior task must run on the junior executor")
+	}
+	if !strings.Contains(junior.req.Prompt, "Contract of this task") || !strings.Contains(junior.req.Prompt, api.ContractMarker) {
+		t.Fatalf("junior must get its contract: %s", junior.req.Prompt)
 	}
 	if d := srv.facts[1].Details.(map[string]any); d["executor"] != "junior" {
 		t.Fatalf("executor must be recorded: %v", d["executor"])
@@ -174,6 +178,7 @@ func TestJuniorTasksGoToTheLocalModel(t *testing.T) {
 	h2 := newHost(t, srv2, claude, fakeVerifier{})
 	tk2 := task(gitRepo(t))
 	tk2.Executor = "junior"
+	tk2.Contract = tk.Contract
 	h2.Process(context.Background(), tk2)
 	if _, f := last(srv2); f.FailureCode != "no_junior" {
 		t.Fatalf("%+v", f)
@@ -224,5 +229,32 @@ func TestWindowsUserTasksRunAsAIWorkerInsideWorkRoot(t *testing.T) {
 	h2.Process(context.Background(), tk2)
 	if _, f := last(srv2); f.FailureCode != "repo_outside_work_root" {
 		t.Fatalf("%+v", f)
+	}
+}
+
+// Junior — только по контракту: ничего сверх разрешённых файлов, тесты-контракт без пропуска.
+func TestJuniorContractIsEnforced(t *testing.T) {
+	contract := &api.Contract{Files: []string{"lib/filter.dart"}, Tests: []string{"test/filter_test.dart"}}
+	cases := map[string]struct {
+		files    map[string]string
+		contract *api.Contract
+		code     string
+	}{
+		"no contract":      {map[string]string{"lib/filter.dart": "x"}, nil, "no_contract"},
+		"outside contract": {map[string]string{"lib/filter.dart": "x", "test/filter_test.dart": "ok", "lib/main.dart": "hack"}, contract, "contract_broken"},
+		"still skipped":    {map[string]string{"lib/filter.dart": "x", "test/filter_test.dart": "skip: '" + api.ContractMarker + "'"}, contract, "contract_unmet"},
+		"done":             {map[string]string{"lib/filter.dart": "x", "test/filter_test.dart": "test passes"}, contract, ""},
+	}
+	for name, c := range cases {
+		srv := &fakeServer{}
+		h := newHost(t, srv, &fakeAgent{}, fakeVerifier{rep: verify.Report{Passed: true}})
+		h.Junior = &fakeAgent{run: writesAll(c.files)}
+		tk := task(gitRepo(t))
+		tk.Executor, tk.Contract = "junior", c.contract
+		h.Process(context.Background(), tk)
+		_, f := last(srv)
+		if f.FailureCode != c.code {
+			t.Errorf("%s: failure %q, want %q", name, f.FailureCode, c.code)
+		}
 	}
 }

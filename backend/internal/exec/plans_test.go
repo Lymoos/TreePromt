@@ -34,10 +34,14 @@ func (f *fx) plan(mode string) (uuid.UUID, *ClaimedTask) {
 }
 
 func goodProposal() *Proposal {
-	return &Proposal{Rationale: "модель, потом экран, потом тесты", Tasks: []PlanTask{
-		{Title: "Модель задачи", Prompt: "Добавить класс Todo", RequiredCapabilities: []string{"flutter"}, RequiredSkills: []string{"dart-clean-code"}},
+	return &Proposal{Rationale: "модель и тесты-контракт, экран, функция фильтра по контракту, сборка", Tasks: []PlanTask{
+		{Title: "Модель задачи", Prompt: "Добавить класс Todo и тесты-контракт для фильтра", RequiredCapabilities: []string{"flutter"},
+			RequiredSkills: []string{"dart-clean-code"}},
 		{Title: "Экран списка", Prompt: "Список и фильтры", DependsOn: []int{0}, TouchesUI: true, ReviewLevel: "tech_lead", MCPProfile: "web"},
-		{Title: "Тесты", Prompt: "Виджет-тесты", DependsOn: []int{0, 1}, Executor: "junior", RequiredSkills: []string{"flutter-widget-tests"}},
+		{Title: "Функция фильтра", Prompt: "Реализовать filterTodos", DependsOn: []int{0}, Executor: "junior",
+			RequiredSkills: []string{"flutter-widget-tests"},
+			Contract:       &Contract{Files: []string{"lib/filter.dart"}, Tests: []string{"./test/filter_test.dart"}}},
+		{Title: "Сборка", Prompt: "Подключить фильтр к экрану", DependsOn: []int{1, 2}},
 	}}
 }
 
@@ -56,7 +60,7 @@ func TestManualPlanWaitsForApprovalThenCreatesTasksWithDependencies(t *testing.T
 		t.Fatal(err)
 	}
 	plans, _ := f.svc.ListPlans(f.ctx, f.user)
-	if len(plans) != 1 || plans[0].Status != PlanApproved || len(plans[0].TaskIDs) != 3 {
+	if len(plans) != 1 || plans[0].Status != PlanApproved || len(plans[0].TaskIDs) != 4 {
 		t.Fatalf("plan: %+v", plans)
 	}
 	// Первая задача — без зависимостей, вторая ждёт первую.
@@ -73,8 +77,51 @@ func TestManualPlanWaitsForApprovalThenCreatesTasksWithDependencies(t *testing.T
 		t.Fatalf("second: %+v", second)
 	}
 	f.exec(`UPDATE exec.tasks SET status = 'DONE' WHERE id = $1`, second.ID)
-	if third := f.claim(); third == nil || third.Executor != "junior" {
+	third := f.claim()
+	if third == nil || third.Executor != "junior" || third.Contract == nil ||
+		strings.Join(third.Contract.Tests, ",") != "test/filter_test.dart" || third.Contract.Files[0] != "lib/filter.dart" {
 		t.Fatalf("third: %+v", third)
+	}
+	if f.claim() != nil {
+		t.Fatal("integration waits for the junior task")
+	}
+}
+
+// Junior сам по себе не работает (решение 13.10.2026).
+func TestJuniorWorksOnlyUnderContractInsideAPlan(t *testing.T) {
+	lists := hostLists{caps: map[string]bool{}, envs: map[string]bool{"container": true}, skills: map[string]bool{},
+		mcp: map[string]bool{"default": true}, executors: map[string]bool{"claude": true, "junior": true}}
+	contract := &Contract{Files: []string{"lib/a.dart"}, Tests: []string{"test/a_test.dart"}}
+	plan := func(junior PlanTask) Proposal {
+		junior.Title, junior.Prompt, junior.Executor = "j", "j", "junior"
+		return Proposal{Tasks: []PlanTask{{Title: "contract", Prompt: "tests"}, junior,
+			{Title: "integrate", Prompt: "i", DependsOn: []int{1}}}}
+	}
+	ok := plan(PlanTask{DependsOn: []int{0}, Contract: contract})
+	if err := ValidateProposal(&ok, lists); err != nil {
+		t.Fatal(err)
+	}
+	bad := map[string]Proposal{
+		"no contract":      plan(PlanTask{DependsOn: []int{0}}),
+		"no tests":         plan(PlanTask{DependsOn: []int{0}, Contract: &Contract{Files: []string{"lib/a.dart"}}}),
+		"path escapes":     plan(PlanTask{DependsOn: []int{0}, Contract: &Contract{Files: []string{"../x"}, Tests: []string{"t"}}}),
+		"absolute path":    plan(PlanTask{DependsOn: []int{0}, Contract: &Contract{Files: []string{"C:/x"}, Tests: []string{"t"}}}),
+		"no claude before": plan(PlanTask{Contract: contract}),
+		"touches ui":       plan(PlanTask{DependsOn: []int{0}, Contract: contract, TouchesUI: true}),
+		"no claude after": {Tasks: []PlanTask{{Title: "c", Prompt: "c"},
+			{Title: "j", Prompt: "j", Executor: "junior", DependsOn: []int{0}, Contract: contract}}},
+		"contract for claude": {Tasks: []PlanTask{{Title: "c", Prompt: "c", Contract: contract}}},
+	}
+	for name, p := range bad {
+		if err := ValidateProposal(&p, lists); err == nil {
+			t.Errorf("%s: must be rejected", name)
+		}
+	}
+
+	f := newFx(t)
+	f.registries(nil, nil, []string{"claude", "junior"})
+	if _, err := f.svc.CreateTask(f.ctx, f.user, NewTask{RepositoryID: f.repo, Title: "t", Prompt: "p", Executor: "junior"}); !errors.Is(err, ErrJuniorOnlyInPlan) {
+		t.Fatalf("direct junior task: %v", err)
 	}
 }
 
@@ -85,7 +132,7 @@ func TestSemiAutoPlanCreatesTasksAtOnce(t *testing.T) {
 	if st, _, _ := f.svc.SubmitPlan(f.ctx, f.host, id, f.worker, c.Attempt, goodProposal(), ""); st != PlanApproved {
 		t.Fatal(st)
 	}
-	if tasks, _ := f.svc.ListTasks(f.ctx, f.user, nil); len(tasks) != 3 || tasks[0].Mode != "semi_auto" {
+	if tasks, _ := f.svc.ListTasks(f.ctx, f.user, nil); len(tasks) != 4 || tasks[0].Mode != "semi_auto" {
 		t.Fatalf("tasks: %+v", tasks)
 	}
 }
@@ -178,7 +225,9 @@ func TestRejectPlan(t *testing.T) {
 
 func TestJuniorTasksNeedAJuniorHost(t *testing.T) {
 	f := newFx(t)
-	f.task(func(n *NewTask) { n.Executor = "junior" })
+	// Задачи Junior появляются только из плана; здесь важна выдача хосту, поэтому исполнитель меняется в базе.
+	id := f.task()
+	f.exec(`UPDATE exec.tasks SET executor = 'junior', contract = '{"files":["a"],"tests":["b"]}' WHERE id = $1`, id)
 	if f.claim() != nil {
 		t.Fatal("host without Ollama must not get junior tasks")
 	}

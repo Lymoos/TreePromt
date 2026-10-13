@@ -482,7 +482,7 @@ func runHost(ctx context.Context, e *env) error {
 	}
 	if junior != nil {
 		executors = append(executors, manager.Option{Name: "junior", Description: "local small model (" + e.cfg.JuniorModel +
-			"): only mechanical work with an exact spec — renames, simple tests, docs, small edits"})
+			"): only under a contract (see the junior rules) — small mechanical, non-visual pieces whose tests a claude task wrote first"})
 	}
 	var visionQA review.Reviewer
 	if ollamaHas(ctx, e.cfg.OllamaURL, e.cfg.VisionModel) {

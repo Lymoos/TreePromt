@@ -199,7 +199,8 @@ void sendDialogTests() {
     final rec = await _pumpSend(tester);
     expect(find.text('todo-sandbox'), findsOneWidget);
     expect(find.text('чужой'), findsNothing, reason: 'only repositories of this project');
-    await tester.tap(find.textContaining('Junior', findRichText: true));
+    expect(find.textContaining('Junior', findRichText: true), findsNothing,
+        reason: 'Junior is never chosen directly: only under a contract inside a Manager plan');
     await tester.tap(find.textContaining('Меняет интерфейс', findRichText: true));
     await tester.tap(find.text('Отправить'));
     await tester.pumpAndSettle();
@@ -207,7 +208,7 @@ void sendDialogTests() {
     expect(post.$2, '/api/v1/exec/tasks');
     expect(post.$3, containsPair('node_id', 'n1'));
     expect(post.$3, containsPair('repository_id', 'r1'));
-    expect(post.$3, containsPair('executor', 'junior'));
+    expect(post.$3.containsKey('executor'), isFalse, reason: 'the server always uses Claude for a single task');
     expect(post.$3, containsPair('touches_ui', true));
     expect(find.text('Задача отправлена в AiCrew'), findsOneWidget);
   });
@@ -216,7 +217,7 @@ void sendDialogTests() {
     final rec = await _pumpSend(tester);
     await tester.tap(find.textContaining('Через Manager', findRichText: true));
     await tester.pump();
-    expect(find.textContaining('Junior', findRichText: true), findsNothing, reason: 'Manager picks executors itself');
+    expect(find.textContaining('Qwen', findRichText: true), findsOneWidget, reason: 'the Manager option explains who does what');
     await tester.tap(find.text('Отправить'));
     await tester.pumpAndSettle();
     expect(rec.calls.firstWhere((c) => c.$1 == 'POST').$2, '/api/v1/exec/plans');

@@ -237,6 +237,9 @@ func (r *run) pipeline() error {
 		if h.Junior == nil {
 			return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "no_junior", Message: "this host has no local model for junior tasks"}
 		}
+		if t.Contract == nil {
+			return &agent.Failure{Class: "AGENT_ERROR", Code: "no_contract", Message: "junior works only under a contract inside a Manager plan"}
+		}
 		ag, role = h.Junior, "junior"
 	}
 	if t.ExecutionEnv == "windows_user" {
@@ -255,6 +258,9 @@ func (r *run) pipeline() error {
 		Timeout: time.Duration(t.AgentRuntimeSec) * time.Second, Previous: lessons(t.PreviousAttempts),
 		Checks: profile.Commands(),
 	}
+	if role == "junior" {
+		req.Prompt += juniorPrompt(t.Contract)
+	}
 	attached, cleanup, err := r.attachSkills(&req)
 	if err != nil {
 		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "skills_failed", Message: err.Error()}
@@ -267,7 +273,14 @@ func (r *run) pipeline() error {
 
 	h.Audit.Add(r.ctx, "attach", map[string]any{"executor": role, "skills": attached, "mcp_profile": mcpRes.Profile,
 		"mcp_servers": mcpRes.Servers, "env": t.ExecutionEnv})
+	started := time.Now()
 	res, err := ag.Run(r.ctx, req)
+	// Расход каждой попытки — для сравнения «только Claude» и «Claude + Junior по контракту».
+	if h.Log != nil {
+		h.Log.Info("agent usage", "task", t.ID, "attempt", t.Attempt, "executor", role, "turns", res.Usage.Turns,
+			"tokens_in", res.Usage.InputTokens, "tokens_out", res.Usage.OutputTokens, "cost_usd", res.Usage.CostUSD,
+			"seconds", int(time.Since(started).Seconds()), "ok", err == nil)
+	}
 	if err != nil {
 		return err
 	}
@@ -286,6 +299,11 @@ func (r *run) pipeline() error {
 	}
 	if facts.NoChanges {
 		return &agent.Failure{Class: "AGENT_ERROR", Code: "no_changes", Message: "agent finished without changing any file"}
+	}
+	if role == "junior" {
+		if err := checkJuniorContract(path, facts.ChangedFiles, t.Contract); err != nil {
+			return err
+		}
 	}
 	if err := r.move("VERIFYING", api.Facts{ResultCommit: facts.ResultCommit, Details: map[string]any{
 		"changed_files": facts.ChangedFiles, "diff_stat": facts.DiffStat, "agent": res,

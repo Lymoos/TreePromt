@@ -29,6 +29,8 @@ func (s *Server) execError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusConflict, "bad_transition", err.Error())
 	case errors.Is(err, exec.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_input", err.Error())
+	case errors.Is(err, exec.ErrJuniorOnlyInPlan):
+		writeError(w, http.StatusBadRequest, "junior_only_in_plan", err.Error())
 	default:
 		s.internalError(w, r, err)
 	}

@@ -21,6 +21,8 @@ var (
 	ErrBadTransition = errors.New("transition is not allowed")
 	ErrNotOwner      = errors.New("task is not leased by this worker")
 	ErrInvalid       = errors.New("invalid input")
+	// ErrJuniorOnlyInPlan — Junior нельзя поставить задачей напрямую: только в плане Manager'а, по контракту.
+	ErrJuniorOnlyInPlan = errors.New("junior works only inside a Manager plan, under a contract")
 )
 
 // Notifier будит хосты и интерфейсы пользователя: «у задач AiCrew что-то изменилось».
@@ -236,9 +238,10 @@ type NewTask struct {
 	RequiredSkills []string `json:"required_skills"`
 	MCPProfile     string   `json:"mcp_profile"`
 	TouchesUI      bool     `json:"touches_ui"`
-	Executor       string   `json:"executor"` // claude | junior
+	Executor       string   `json:"executor"` // claude | junior (junior — только в плане Manager'а, по контракту)
 
-	planID *uuid.UUID
+	planID   *uuid.UUID
+	contract *Contract
 }
 
 func (in *NewTask) defaults() {
@@ -349,15 +352,23 @@ func insertTask(ctx context.Context, tx pgx.Tx, userID, repoProject uuid.UUID, i
 	if title == "" || prompt == "" {
 		return uuid.Nil, ErrInvalid
 	}
+	// Junior сам по себе не работает (решение 13.10.2026): только задача плана с контрактом.
+	if in.Executor == "junior" && (in.planID == nil || in.contract == nil) {
+		return uuid.Nil, ErrJuniorOnlyInPlan
+	}
+	var contract []byte
+	if in.contract != nil {
+		contract, _ = json.Marshal(in.contract)
+	}
 	caps, _ := json.Marshal(nonNil(in.RequiredCapabilities))
 	skills, _ := json.Marshal(nonNil(in.RequiredSkills))
 	id := uuid.Must(uuid.NewV7())
 	if _, err := tx.Exec(ctx, `INSERT INTO exec.tasks (id, project_id, node_id, repository_id, created_by, title, prompt, status,
 			execution_mode, execution_env, required_capabilities, max_attempts, review_level,
-			plan_id, required_skills, mcp_profile, touches_ui, executor)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'QUEUED', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+			plan_id, required_skills, mcp_profile, touches_ui, executor, contract)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'QUEUED', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		id, repoProject, in.NodeID, in.RepositoryID, userID, title, prompt, in.ExecutionMode, in.ExecutionEnv, caps, in.MaxAttempts,
-		in.ReviewLevel, in.planID, skills, in.MCPProfile, in.TouchesUI, in.Executor); err != nil {
+		in.ReviewLevel, in.planID, skills, in.MCPProfile, in.TouchesUI, in.Executor, contract); err != nil {
 		if strings.Contains(err.Error(), "check constraint") {
 			return uuid.Nil, ErrInvalid
 		}
@@ -389,6 +400,7 @@ type ClaimedTask struct {
 	MCPProfile       string         `json:"mcp_profile"`
 	TouchesUI        bool           `json:"touches_ui"`
 	Executor         string         `json:"executor"`
+	Contract         *Contract      `json:"contract,omitempty"`
 	Attempt          int            `json:"attempt"`
 	Title            string         `json:"title"`
 	Prompt           string         `json:"prompt"`
@@ -458,8 +470,9 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		return plan, nil
 	}
 	t := ClaimedTask{Kind: KindExecute}
+	var contract []byte
 	err = tx.QueryRow(ctx, `SELECT t.id, t.attempt, t.title, t.prompt, t.execution_env, t.review_level, t.agent_runtime_sec,
-			t.verification_runtime_sec, t.required_skills, t.mcp_profile, t.touches_ui, t.executor, r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
+			t.verification_runtime_sec, t.required_skills, t.mcp_profile, t.touches_ui, t.executor, t.contract, r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
 		FROM exec.tasks t
 		JOIN exec.repositories r ON r.id = t.repository_id
 		JOIN exec.hosts h ON h.id = r.host_id
@@ -476,7 +489,7 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		LIMIT 1
 		FOR UPDATE OF t SKIP LOCKED`, hostID, now).
 		Scan(&t.ID, &t.Attempt, &t.Title, &t.Prompt, &t.ExecutionEnv, &t.ReviewLevel, &t.AgentRuntimeSec, &t.VerifyRuntimeSec,
-			&t.RequiredSkills, &t.MCPProfile, &t.TouchesUI, &t.Executor,
+			&t.RequiredSkills, &t.MCPProfile, &t.TouchesUI, &t.Executor, &contract,
 			&t.Repository.ID, &t.Repository.ProjectID, &t.Repository.HostID, &t.Repository.Name, &t.Repository.LocalPath,
 			&t.Repository.DefaultBranch, &t.Repository.IntegrationBranch, &t.Repository.VerificationProfile)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -484,6 +497,12 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(contract) > 0 {
+		t.Contract = &Contract{}
+		if err := json.Unmarshal(contract, t.Contract); err != nil {
+			return nil, err
+		}
 	}
 	t.Attempt++
 	t.LeaseExpiresAt = now.Add(LeaseTTL)

@@ -48,6 +48,26 @@ type PlanTask struct {
 	RequiredSkills       []string `json:"required_skills"`
 	MCPProfile           string   `json:"mcp_profile"`
 	Executor             string   `json:"executor"`
+	// Contract — обязателен для executor=junior: Junior делает только это.
+	Contract *Contract `json:"contract,omitempty"`
+}
+
+// Contract — граница работы Junior. Тесты пишет задача Claude, от которой Junior зависит, и помечает их
+// пропущенными с причиной ContractMarker; Junior реализует код и снимает пропуск. Хост проверяет и то, и другое.
+type Contract struct {
+	Files []string `json:"files"` // что Junior может менять (кроме тестов)
+	Tests []string `json:"tests"` // файлы с тестами-контрактом
+}
+
+// ContractMarker — причина пропуска тестов-контракта (skip: 'aicrew-contract', t.Skip("aicrew-contract")).
+const ContractMarker = "aicrew-contract"
+
+func cleanContractPath(p string) (string, bool) {
+	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+	if p == "" || strings.HasPrefix(p, "/") || strings.Contains(p, ":") || strings.Contains("/"+p+"/", "/../") || strings.HasPrefix(p, ".git/") {
+		return "", false
+	}
+	return strings.TrimPrefix(p, "./"), true
 }
 
 type Proposal struct {
@@ -264,12 +284,64 @@ func ValidateProposal(p *Proposal, l hostLists) error {
 				return fmt.Errorf("task %d: bad dependency %d", i, d)
 			}
 		}
+		if err := validateContract(i, t); err != nil {
+			return err
+		}
+	}
+	// Junior никогда не работает сам по себе: перед ним задача Claude с тестами, после — задача Claude, которая собирает.
+	for i, t := range p.Tasks {
+		if t.Executor != "junior" {
+			continue
+		}
+		before := false
+		for _, d := range t.DependsOn {
+			before = before || p.Tasks[d].Executor == "claude"
+		}
+		after := false
+		for _, o := range p.Tasks {
+			if o.Executor != "claude" {
+				continue
+			}
+			for _, d := range o.DependsOn {
+				after = after || d == i
+			}
+		}
+		if !before || !after {
+			return fmt.Errorf("task %d: a junior task must depend on a claude task that writes its contract tests "+
+				"and be followed by a claude task that integrates it", i)
+		}
 	}
 	if _, err := topoOrder(p.Tasks); err != nil {
 		return err
 	}
 	if utf8.RuneCountInString(p.Rationale) > 4000 {
 		p.Rationale = string([]rune(p.Rationale)[:4000])
+	}
+	return nil
+}
+
+func validateContract(i int, t *PlanTask) error {
+	if t.Executor != "junior" {
+		if t.Contract != nil {
+			return fmt.Errorf("task %d: contract is only for junior tasks", i)
+		}
+		return nil
+	}
+	if t.TouchesUI {
+		return fmt.Errorf("task %d: junior does not do user-facing work (touches_ui)", i)
+	}
+	c := t.Contract
+	if c == nil || len(c.Files) == 0 || len(c.Tests) == 0 || len(c.Files)+len(c.Tests) > 12 {
+		return fmt.Errorf("task %d: a junior task needs a contract with 1..12 files and tests", i)
+	}
+	for _, list := range []*[]string{&c.Files, &c.Tests} {
+		for k, p := range *list {
+			clean, ok := cleanContractPath(p)
+			if !ok {
+				return fmt.Errorf("task %d: bad contract path %q", i, p)
+			}
+			(*list)[k] = clean
+		}
 	}
 	return nil
 }
@@ -388,6 +460,7 @@ func (s *Service) applyPlan(ctx context.Context, tx pgx.Tx, planID uuid.UUID, pl
 			RepositoryID: pl.repo, Title: t.Title, Prompt: t.Prompt, ExecutionMode: pl.mode, ExecutionEnv: t.ExecutionEnv,
 			RequiredCapabilities: t.RequiredCapabilities, DependsOn: deps, ReviewLevel: t.ReviewLevel,
 			RequiredSkills: t.RequiredSkills, MCPProfile: t.MCPProfile, TouchesUI: t.TouchesUI, Executor: t.Executor, planID: &pid,
+			contract: t.Contract,
 		})
 		if err != nil {
 			return err

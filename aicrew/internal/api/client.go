@@ -228,7 +228,17 @@ type Task struct {
 	MCPProfile       string            `json:"mcp_profile"`
 	TouchesUI        bool              `json:"touches_ui"`
 	Executor         string            `json:"executor"` // claude | junior
+	Contract         *Contract         `json:"contract,omitempty"`
 }
+
+// Contract — граница работы Junior: файлы, которые он может менять, и тесты-контракт, которые он должен оживить
+// (их пишет задача Claude и помечает пропущенными с причиной ContractMarker).
+type Contract struct {
+	Files []string `json:"files"`
+	Tests []string `json:"tests"`
+}
+
+const ContractMarker = "aicrew-contract"
 
 // Integration — ветка, в которую AiCrew сливает результаты (никогда не main).
 func (r Repository) Integration() string {
@@ -373,16 +383,17 @@ func (c *Client) UpdateProfile(ctx context.Context, repoID string, profile json.
 const KindPlan = "plan"
 
 type PlanTask struct {
-	Title                string   `json:"title"`
-	Prompt               string   `json:"prompt"`
-	DependsOn            []int    `json:"depends_on"`
-	RequiredCapabilities []string `json:"required_capabilities"`
-	ExecutionEnv         string   `json:"execution_env"`
-	ReviewLevel          string   `json:"review_level"`
-	TouchesUI            bool     `json:"touches_ui"`
-	RequiredSkills       []string `json:"required_skills"`
-	MCPProfile           string   `json:"mcp_profile"`
-	Executor             string   `json:"executor"`
+	Title                string    `json:"title"`
+	Prompt               string    `json:"prompt"`
+	DependsOn            []int     `json:"depends_on"`
+	RequiredCapabilities []string  `json:"required_capabilities"`
+	ExecutionEnv         string    `json:"execution_env"`
+	ReviewLevel          string    `json:"review_level"`
+	TouchesUI            bool      `json:"touches_ui"`
+	RequiredSkills       []string  `json:"required_skills"`
+	MCPProfile           string    `json:"mcp_profile"`
+	Executor             string    `json:"executor"`
+	Contract             *Contract `json:"contract,omitempty"`
 }
 
 type Proposal struct {

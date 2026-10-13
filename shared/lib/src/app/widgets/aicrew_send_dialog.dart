@@ -29,7 +29,6 @@ class _SendDialogState extends ConsumerState<_SendDialog> {
   List<ExecRepository>? _repos;
   String? _repo;
   bool _plan = false;
-  String _executor = 'claude';
   String _mode = 'manual';
   bool _techLead = false;
   bool _touchesUI = false;
@@ -82,7 +81,6 @@ class _SendDialogState extends ConsumerState<_SendDialog> {
           nodeId: widget.nodeId,
           repositoryId: _repo!,
           mode: _mode,
-          executor: _executor,
           reviewLevel: _techLead ? 'tech_lead' : 'logic',
           touchesUI: _touchesUI,
         );
@@ -166,14 +164,9 @@ class _SendDialogState extends ConsumerState<_SendDialog> {
                 onChanged: (v) => setState(() => _repo = v),
               ),
               label('Как выполнять'),
-              choice(false, _plan, 'Одной задачей', (v) => _plan = v),
-              choice(true, _plan, 'Через Manager', (v) => _plan = v, hint: 'он разложит задачу на подзадачи и подберёт исполнителей и скиллы'),
-              if (!_plan) ...[
-                label('Исполнитель'),
-                choice('claude', _executor, 'Claude', (v) => _executor = v),
-                choice('junior', _executor, 'Junior — локальная Qwen', (v) => _executor = v,
-                    hint: 'для простой механической работы: переименования, простые тесты'),
-              ],
+              choice(false, _plan, 'Одной задачей', (v) => _plan = v, hint: 'всё делает Claude'),
+              choice(true, _plan, 'Через Manager', (v) => _plan = v,
+                  hint: 'Claude разложит задачу; механические части по его тестам сделает локальная Qwen, Claude соберёт'),
               label('Режим'),
               choice('manual', _mode, 'Ручной', (v) => _mode = v, hint: 'перед слиянием спросят вас'),
               choice('semi_auto', _mode, 'Полуавтомат', (v) => _mode = v, hint: 'проверенное сливается само'),
