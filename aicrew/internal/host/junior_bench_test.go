@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 
 // Сравнение локальных моделей на задачах-контрактах Junior (по желанию, не в CI):
 //
-//	AICREW_BENCH_REPO=<репозиторий с контрактами> AICREW_BENCH_MODELS=qwen3:8b,qwen2.5-coder:7b \
+//	AICREW_BENCH_REPO=<полигон, например aicrew-sandbox> AICREW_BENCH_MODELS=qwen3:8b,qwen2.5-coder:7b \
 //	[AICREW_BENCH_ONLY=filter] go test -run JuniorBench -v -timeout 3h ./internal/host
 //
 // Каждый контракт — в свежей копии репозитория, до двух попыток (вторая знает, почему не прошла первая),
@@ -49,15 +50,17 @@ func TestJuniorBench(t *testing.T) {
 			}
 			count++
 			dir := filepath.Join(t.TempDir(), "w")
-			if out, err := exec.Command("git", "clone", "-q", "--local", repo, dir).CombinedOutput(); err != nil {
+			if out, err := exec.Command("git", "clone", "-q", repo, dir).CombinedOutput(); err != nil {
 				t.Fatalf("clone: %v %s", err, out)
 			}
+			seedContracts(t, dir)
 			// Как в службе: метку пропуска снимает служба, Junior тесты не трогает.
 			tests, err := unskipContract(dir, &ct.c)
 			if err != nil {
 				t.Fatal(err)
 			}
-			l := &agent.Local{R: run, Image: "aicrew-agent-flutter:local", BaseURL: "http://127.0.0.1:11434", Model: model, NumCtx: 16384}
+			l := &agent.Local{R: run, Image: "aicrew-agent-flutter:local", BaseURL: "http://127.0.0.1:11434", Model: model, NumCtx: 16384,
+				Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 			var previous []string
 			result := "FAILED"
 			start := time.Now()
@@ -94,6 +97,35 @@ func TestJuniorBench(t *testing.T) {
 		report = append(report, fmt.Sprintf("%-18s TOTAL   %d/%d passed, %d on first try, %s", model, passed, count, firstTry, total))
 	}
 	t.Log("\n" + strings.Join(report, "\n"))
+}
+
+// seedContracts — как задача контракта Claude: заглушки и пропущенные тесты из testdata/bench, отдельным коммитом.
+func seedContracts(t *testing.T, dir string) {
+	t.Helper()
+	src := filepath.Join("testdata", "bench")
+	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=bench", "-c", "user.email=bench@aicrew", "commit", "-q", "-m", "contracts"}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
 }
 
 func changedFiles(t *testing.T, dir string) []string {
