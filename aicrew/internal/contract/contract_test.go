@@ -1,6 +1,9 @@
 package contract
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -135,5 +138,27 @@ func TestGlob(t *testing.T) {
 		if Glob(c.g).MatchString(c.p) != c.ok {
 			t.Errorf("%s ~ %s: want %v", c.g, c.p, c.ok)
 		}
+	}
+}
+
+// Контракт самого PromptTree (этап 7.9) должен разбираться и защищать опасные места.
+func TestPromptTreeContractParses(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{".github/workflows/ci.yml", "backend/migrations/00011_x.sql", "aicrew/internal/secrets/secrets.go",
+		"aicrew/skills/roblox-ui-ux/SKILL.md", "design/DECISIONS.md"} {
+		if !matchAny(c.ProtectedPaths, p) {
+			t.Errorf("%s must need the owner's approval", p)
+		}
+	}
+	if matchAny(c.ProtectedPaths, "shared/lib/src/app/screens/editor_screen.dart") {
+		t.Error("ordinary code must not need approval")
 	}
 }

@@ -3,6 +3,9 @@ package verify
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,5 +128,21 @@ func TestNativeRobloxChecksUseOnlyConfiguredTools(t *testing.T) {
 	bad := Profile{Steps: []Step{{Name: "x", Argv: []string{"powershell", "-c", "rm -r ~"}}}}
 	if _, err := v.Run(context.Background(), bad, "", "", time.Minute); err == nil {
 		t.Fatal("unknown tool must be denied")
+	}
+}
+
+// Профиль самого PromptTree (этап 7.9): Go и Flutter в одном образе, шаги через bash -c в подпапках.
+func TestPromptTreeProfileParses(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "profiles", "prompttree.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := ParseProfile(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Image != "aicrew-agent-monorepo:local" || len(p.ForStage(StageAttempt).Steps) != 8 {
+		t.Fatalf("%+v", p)
 	}
 }

@@ -1,0 +1,25 @@
+# Контракт архитектуры PromptTree для AiCrew (этап 7.9, docs/stage7-9-projects.md).
+# AiCrew работает над своим же кодом, поэтому опасные места всегда требуют одобрения владельца,
+# даже в полуавтомате. В main изменения переносит только владелец (aicrew-host promote).
+version: 1
+modules:
+  backend: { paths: ["backend/**"] }
+  aicrew: { paths: ["aicrew/**"] }
+  shared: { paths: ["shared/**"] }
+  apps: { paths: ["app-desktop/**", "app-mobile/**", "web/**"] }
+  docs: { paths: ["docs/**", "design/**", "*.md"] }
+allow:
+  apps: [shared]
+forbidden_imports: []
+protected_paths:
+  - ".github/**"                     # CI и автодеплой на сервер
+  - "backend/deploy/**"              # установка и обновление сервера
+  - "backend/migrations/**"          # схема базы
+  - "aicrew/internal/secrets/**"     # хранилище токенов
+  - "aicrew/internal/runas/**"       # запуск от другого пользователя Windows
+  - "aicrew/internal/secretscan/**"  # сканер секретов
+  - "aicrew/images/**"               # образы агентов
+  - "aicrew/skills/**"               # скиллы: то, чему учат агентов
+  - "aicrew/profiles/**"             # профили проверки
+  - "design/**"                      # решения по дизайну согласует владелец
+readonly_paths: []

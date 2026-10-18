@@ -24,3 +24,6 @@ test/failures/
 
 # Картинки расхождений тестов-снимков Flutter
 **/test/failures/
+
+# AiCrew: рабочие копии задач (этап 7.9 — PromptTree как проект AiCrew)
+.aiworktrees/

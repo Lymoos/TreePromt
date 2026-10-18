@@ -1,0 +1,13 @@
+{
+  "image": "aicrew-agent-monorepo:local",
+  "steps": [
+    {"name": "backend gofmt", "kind": "lint", "argv": ["bash", "-c", "cd backend && gofmt -l ."], "fail_on_output": true},
+    {"name": "backend vet + test", "kind": "test", "argv": ["bash", "-c", "cd backend && go vet ./... && go test ./..."]},
+    {"name": "aicrew gofmt", "kind": "lint", "argv": ["bash", "-c", "cd aicrew && gofmt -l ."], "fail_on_output": true},
+    {"name": "aicrew vet + test", "kind": "test", "argv": ["bash", "-c", "cd aicrew && go vet ./... && go test ./..."]},
+    {"name": "shared analyze + test", "kind": "test", "argv": ["bash", "-c", "cd shared && flutter pub get && flutter analyze && flutter test --exclude-tags golden"]},
+    {"name": "app-desktop analyze + test", "kind": "test", "argv": ["bash", "-c", "cd app-desktop && flutter pub get && flutter analyze && flutter test --exclude-tags golden"]},
+    {"name": "app-mobile analyze + test", "kind": "test", "argv": ["bash", "-c", "cd app-mobile && flutter pub get && flutter analyze && flutter test --exclude-tags golden"]},
+    {"name": "web analyze + test", "kind": "test", "argv": ["bash", "-c", "cd web && flutter pub get && flutter analyze && flutter test --exclude-tags golden"]}
+  ]
+}
