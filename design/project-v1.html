@@ -1,0 +1,343 @@
+<title>Окно проекта PromptTree</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Окно проекта и выбор скиллов в системе PromptTree: ч/б и серые, смысл — формой, мягкие тени, радиусы 8/12/16. */
+:root {
+  --bg: #ffffff; --fg: #111111; --muted: #6e6e6e; --faint: #a8a8a8;
+  --line: #e7e7e7; --line-strong: #c9c9c9; --hover: #f3f3f3; --sel: #ebebeb; --panel: #fafafa;
+  --inv-bg: #111111; --inv-fg: #f2f2f2; --shadow: rgba(0,0,0,.07);
+  --font-ui: "Onest", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e0e0e; --fg: #ececec; --muted: #9a9a9a; --faint: #5c5c5c;
+    --line: #232323; --line-strong: #3a3a3a; --hover: #1a1a1a; --sel: #242424; --panel: #131313;
+    --inv-bg: #ececec; --inv-fg: #0e0e0e; --shadow: rgba(0,0,0,.5); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e0e0e; --fg: #ececec; --muted: #9a9a9a; --faint: #5c5c5c;
+  --line: #232323; --line-strong: #3a3a3a; --hover: #1a1a1a; --sel: #242424; --panel: #131313;
+  --inv-bg: #ececec; --inv-fg: #0e0e0e; --shadow: rgba(0,0,0,.5); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 56px; display: grid; gap: 22px; }
+.mono { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+h1 { font-size: 20px; font-weight: 600; margin: 0; text-wrap: balance; }
+h2 { font-size: 13px; font-weight: 600; margin: 0; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+h3 { font-size: 15px; font-weight: 600; margin: 0; }
+p { margin: 0; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+
+.proto { display: grid; gap: 10px; padding: 14px 16px; border: 1px dashed var(--line-strong); border-radius: 12px; background: var(--panel); }
+.proto p { color: var(--muted); max-width: 78ch; }
+.proto .row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 6px 12px; }
+.seg button[aria-pressed="true"] { background: var(--inv-bg); color: var(--inv-fg); }
+
+.btn { border: 1px solid var(--line-strong); background: var(--bg); border-radius: 12px; padding: 7px 13px; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--inv-bg); color: var(--inv-fg); border-color: var(--inv-bg); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.sm { padding: 4px 10px; font-size: 13px; border-radius: 8px; }
+
+/* маркеры дерева PromptTree */
+.mk { width: 9px; height: 9px; display: inline-block; flex: none; }
+.mk.project { background: var(--fg); border-radius: 1px; }
+.mk.note { border: 1.5px solid var(--fg); border-radius: 50%; }
+.mk.task { border: 1.5px solid var(--fg); transform: rotate(45deg) scale(.82); }
+.mk.task.full { background: var(--fg); }
+
+/* окно ПК */
+.window { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--bg); box-shadow: 0 12px 40px var(--shadow); }
+.app { display: grid; grid-template-columns: 250px minmax(0, 1fr); min-height: 640px; }
+.side { border-right: 1px solid var(--line); background: var(--panel); padding: 14px 10px; display: grid; align-content: start; gap: 2px; }
+.side .brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px 12px; font-weight: 600; }
+.row-t { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px; min-width: 0; }
+.row-t span.n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-t.sel { background: var(--sel); }
+.row-t.ind1 { padding-left: 24px; } .row-t.ind2 { padding-left: 40px; }
+.row-t .cnt { margin-left: auto; }
+.ctx { margin: 6px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); box-shadow: 0 8px 24px var(--shadow); padding: 6px; display: grid; }
+.ctx div { padding: 6px 10px; border-radius: 8px; display: flex; gap: 8px; align-items: center; }
+.ctx div.hl { background: var(--hover); font-weight: 500; }
+.ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
+
+.main { padding: 22px 28px 28px; display: grid; gap: 20px; align-content: start; min-width: 0; }
+.crumbs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.phead { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; justify-content: space-between; }
+.phead .t { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tabs button { border: 0; background: none; padding: 8px 12px; border-bottom: 2px solid transparent; color: var(--muted); }
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--fg); font-weight: 500; }
+
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.sec { border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 12px; min-width: 0; background: var(--bg); }
+.sec .h { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.hint { color: var(--muted); font-size: 13px; }
+textarea, input[type=text], select { width: 100%; border: 1px solid transparent; background: var(--hover); border-radius: 12px; padding: 10px 12px; resize: vertical; }
+textarea { min-height: 150px; line-height: 1.5; }
+textarea:focus, input:focus, select:focus { border-color: var(--line-strong); outline: none; }
+label.f { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+
+.files { display: grid; gap: 6px; }
+.file { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--line); min-width: 0; }
+.file .ic { width: 26px; height: 32px; border: 1.5px solid var(--fg); border-radius: 3px 8px 3px 3px; flex: none; display: grid; place-items: end center; font: 500 8px/1.8 var(--font-mono); }
+.file .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file .sz { margin-left: auto; flex: none; }
+.drop { border: 1.5px dashed var(--line-strong); border-radius: 12px; padding: 12px; text-align: center; color: var(--muted); font-size: 13px; }
+
+.radio { display: grid; gap: 8px; }
+.opt { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; align-items: flex-start; }
+.opt.on { border-color: var(--fg); }
+.dot { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--fg); flex: none; margin-top: 2px; display: grid; place-items: center; }
+.opt.on .dot::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--fg); }
+.opt .txt { display: grid; gap: 2px; min-width: 0; }
+.bound { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); }
+.bound b { font-weight: 600; }
+.st-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--fg); display: inline-block; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px/1 var(--font-mono); padding: 6px 8px; border-radius: 8px; background: var(--sel); display: inline-flex; gap: 6px; align-items: center; }
+.chip.lock { background: transparent; border: 1px solid var(--line-strong); }
+.chip.no { background: transparent; border: 1px dashed var(--line-strong); color: var(--muted); text-decoration: line-through; }
+.chip .x { color: var(--muted); }
+.chip.add { background: transparent; border: 1px dashed var(--line-strong); color: var(--muted); cursor: pointer; }
+
+/* редактор AI Task */
+.editor { display: grid; gap: 14px; }
+.taskhead { display: grid; gap: 10px; }
+.skillbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.skillbar .lbl { font-size: 13px; color: var(--muted); margin-right: 4px; }
+.pop { position: relative; }
+.picker { margin-top: 8px; width: min(440px, 100%); border: 1px solid var(--line); border-radius: 16px; background: var(--bg); box-shadow: 0 16px 40px var(--shadow); padding: 8px; display: grid; gap: 4px; }
+.picker input { border-radius: 10px; }
+.sk { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 10px; padding: 8px 10px; border-radius: 10px; align-items: start; }
+.sk:hover { background: var(--hover); }
+.sk .cb { width: 16px; height: 16px; border: 1.5px solid var(--fg); border-radius: 4px; margin-top: 2px; display: grid; place-items: center; }
+.sk.on .cb { background: var(--fg); }
+.sk.on .cb::after { content: ""; width: 7px; height: 4px; border-left: 2px solid var(--bg); border-bottom: 2px solid var(--bg); transform: rotate(-45deg) translate(1px, -1px); }
+.sk.locked .cb { border-style: dotted; }
+.sk .d { color: var(--muted); font-size: 12.5px; }
+.sk .nm { font: 500 13px var(--font-mono); }
+.body-text { border-radius: 12px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; line-height: 1.6; min-width: 0; }
+
+/* телефон */
+.phones { display: flex; flex-wrap: wrap; gap: 24px; justify-content: center; }
+.phone { width: 340px; max-width: 100%; border: 1px solid var(--line-strong); border-radius: 34px; padding: 10px; background: var(--panel); box-shadow: 0 12px 40px var(--shadow); }
+.screen { border-radius: 26px; background: var(--bg); overflow: hidden; min-height: 620px; display: grid; align-content: start; }
+.pbar { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+.pbody { padding: 14px 14px 18px; display: grid; gap: 14px; }
+.pbody .sec { padding: 12px; border-radius: 14px; }
+.pbody textarea { min-height: 96px; }
+.sheet { border-top-left-radius: 20px; border-top-right-radius: 20px; border: 1px solid var(--line); box-shadow: 0 -8px 30px var(--shadow); padding: 10px 14px 16px; display: grid; gap: 8px; background: var(--bg); }
+.grab { width: 36px; height: 4px; border-radius: 4px; background: var(--line-strong); margin: 0 auto 4px; }
+
+.notes { display: grid; gap: 8px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); }
+.notes ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+[hidden] { display: none !important; }
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .side { display: none; }
+  .grid2 { grid-template-columns: 1fr; }
+  .main { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <div class="proto">
+    <h1>Окно проекта и выбор скиллов — макет на согласование</h1>
+    <p>Этап 7.9: у проекта появляется своё окно — описание для ИИ, файлы, код (папка на ПК или git-репозиторий) и скиллы. В AI Task можно самому выбрать скиллы. Данные в макете — примеры.</p>
+    <div class="row">
+      <div class="seg" role="group" aria-label="Что показать">
+        <button type="button" data-view="project" aria-pressed="true">Окно проекта · ПК</button>
+        <button type="button" data-view="task" aria-pressed="false">Скиллы в AI Task · ПК</button>
+        <button type="button" data-view="phone" aria-pressed="false">Телефон</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ПК: окно проекта -->
+  <section data-panel="project" class="window" aria-label="Окно проекта на ПК">
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="mk project"></span> PromptTree</div>
+        <div class="row-t sel"><span class="mk project"></span><span class="n">Ловля пасхалок</span><span class="cnt mono">12</span></div>
+        <div class="row-t ind1"><span class="n" style="font-weight:500">Механики</span><span class="cnt mono">4</span></div>
+        <div class="row-t ind2"><span class="mk task full"></span><span class="n">Двойной прыжок</span></div>
+        <div class="row-t ind2"><span class="mk task"></span><span class="n">Магазин скинов</span></div>
+        <div class="row-t ind1"><span class="mk note"></span><span class="n">Идеи на потом</span></div>
+        <div class="ctx" aria-label="Меню проекта">
+          <div class="hl">Окно проекта…</div>
+          <div>Переименовать</div>
+          <div>Новая AI Task</div>
+          <hr>
+          <div>Удалить</div>
+        </div>
+        <div class="row-t"><span class="mk project"></span><span class="n">Полигон AiCrew</span><span class="cnt mono">5</span></div>
+        <div class="row-t"><span class="mk project"></span><span class="n">PromptTree и AiCrew</span><span class="cnt mono">31</span></div>
+      </aside>
+
+      <div class="main">
+        <div class="phead">
+          <div class="t"><span class="mk project"></span><h3 style="font-size:20px">Ловля пасхалок</h3></div>
+          <div class="crumbs mono">проект · 12 заметок · обновлён 19.10</div>
+        </div>
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true">О проекте</button>
+          <button role="tab" aria-selected="false">Код</button>
+          <button role="tab" aria-selected="false">Скиллы</button>
+        </div>
+
+        <div class="grid2">
+          <div class="sec">
+            <div class="h"><h3>Описание для ИИ</h3><span class="mono">уходит в каждую задачу проекта</span></div>
+            <textarea id="desc" aria-label="Описание проекта для ИИ">Игра в Roblox для детей 8–12 лет: игрок ищет пасхалки на карте парка, за находки получает монеты и скины.
+Стиль — мультяшный, светлый, крупные кнопки (играют в основном с телефона).
+Код синхронизируется через Rojo, сервер — источник истины для монет.
+Нельзя: платные механики с таймерами, чат между игроками.</textarea>
+            <p class="hint">Что это за проект, для кого, на чём сделан и чего делать нельзя. Агенты читают это перед каждой задачей.</p>
+          </div>
+
+          <div class="sec">
+            <div class="h"><h3>Файлы проекта</h3><span class="mono">3 файла · 4,1 МБ</span></div>
+            <div class="files">
+              <div class="file"><span class="ic">MD</span><span class="nm">ТЗ_пасхалки_v2.md</span><span class="sz mono">18 КБ</span></div>
+              <div class="file"><span class="ic">PNG</span><span class="nm">макет_магазина.png</span><span class="sz mono">2,9 МБ</span></div>
+              <div class="file"><span class="ic">PDF</span><span class="nm">гайд_по_стилю.pdf</span><span class="sz mono">1,2 МБ</span></div>
+            </div>
+            <div class="drop">Перетащите файлы сюда или <button type="button" class="btn sm">Выбрать файлы</button><br><span class="mono">до 20 МБ на файл · агенты видят их только для чтения</span></div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div class="h"><h3>Код проекта</h3><span class="mono">вкладка «Код»</span></div>
+          <div class="radio" role="radiogroup" aria-label="Где код">
+            <div class="opt on"><span class="dot"></span><div class="txt"><b>Папка на ПК с AiCrew</b><span class="hint">код уже лежит на компьютере, где работает служба AiCrew</span></div></div>
+            <div class="opt"><span class="dot"></span><div class="txt"><b>Git-репозиторий</b><span class="hint">служба сама скачает его в D:\aicrew-work\&lt;проект&gt; (GitHub: адрес и ветка)</span></div></div>
+          </div>
+          <div class="grid2">
+            <label class="f">Путь к папке на ПК<input type="text" id="path" value="D:\aicrew-work\easter-hunt"></label>
+            <label class="f">Как проверять код<select id="tpl"><option>Roblox (StyLua, Selene)</option><option>Flutter</option><option>Go</option><option>Web</option><option>Свои команды…</option></select></label>
+          </div>
+          <div class="bound"><span class="st-dot"></span><b>Привязан</b><span>к ПК <span class="mono">DESKTOP-E2RTGAK</span></span><span class="mono">ветка main → aicrew/integration</span><span style="margin-left:auto" class="hint">в main переносите только вы (promote)</span></div>
+        </div>
+
+        <div class="sec">
+          <div class="h"><h3>Скиллы проекта</h3><span class="mono">вкладка «Скиллы»</span></div>
+          <div class="chips">
+            <span class="chip lock">roblox-luau</span><span class="chip lock">roblox-ui-ux</span><span class="chip lock">testing-strategy</span>
+            <span class="chip no">frontend-design</span>
+            <span class="chip add">+ скилл</span>
+          </div>
+          <p class="hint">В рамке — обязательные для каждой задачи проекта, зачёркнутые — запрещённые. Остальные подбирает Manager или вы в самой задаче.</p>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="btn ghost">Отмена</button><button class="btn primary">Сохранить</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ПК: скиллы в AI Task -->
+  <section data-panel="task" class="window" aria-label="Скиллы в редакторе AI Task" hidden>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="mk project"></span> PromptTree</div>
+        <div class="row-t"><span class="mk project"></span><span class="n">Ловля пасхалок</span><span class="cnt mono">12</span></div>
+        <div class="row-t ind1"><span class="n" style="font-weight:500">Механики</span><span class="cnt mono">4</span></div>
+        <div class="row-t ind2"><span class="mk task full"></span><span class="n">Двойной прыжок</span></div>
+        <div class="row-t ind2 sel"><span class="mk task"></span><span class="n">Магазин скинов</span></div>
+      </aside>
+      <div class="main editor">
+        <div class="crumbs mono">Ловля пасхалок / Механики / Магазин скинов</div>
+        <div class="taskhead">
+          <div class="t" style="display:flex;gap:10px;align-items:center"><span class="mk task"></span><h3 style="font-size:20px">Магазин скинов</h3></div>
+          <div class="skillbar">
+            <span class="lbl">Скиллы:</span>
+            <span class="chip lock" title="обязательный для проекта">roblox-luau</span>
+            <span class="chip lock" title="обязательный для проекта">testing-strategy</span>
+            <span class="chip">roblox-ui-ux <span class="x">×</span></span>
+            <span class="chip add">+ скилл</span>
+          </div>
+          <div class="pop">
+            <div class="picker" role="dialog" aria-label="Выбор скиллов">
+              <input type="text" id="sksearch" placeholder="Найти скилл">
+              <div class="sk locked on"><span class="cb"></span><div><div class="nm">roblox-luau</div><div class="d">обязательный для проекта · Luau, Rojo, безопасные RemoteEvents</div></div></div>
+              <div class="sk on"><span class="cb"></span><div><div class="nm">roblox-ui-ux</div><div class="d">интерфейсы Roblox: токены, раскладка, анимации, мобильные</div></div></div>
+              <div class="sk"><span class="cb"></span><div><div class="nm">db-migrations</div><div class="d">миграции PostgreSQL и Drift</div></div></div>
+              <div class="sk"><span class="cb"></span><div><div class="nm">webapp-testing</div><div class="d">проверка веб-приложений в браузере (Anthropic)</div></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="body-text">Сделай магазин скинов: сетка карточек 2×N, у каждой цена в монетах, кнопка «Купить», состояние «уже есть». Покупку проверяет сервер. На телефоне — во весь экран, закрытие крестиком и тапом по затемнению.</div>
+        <p class="hint">Выбранные скиллы уходят с задачей в AiCrew. Обязательные скиллы проекта стоят всегда и не снимаются; при отправке «через Manager» он может добавить свои, но не убрать ваши.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Телефон -->
+  <section data-panel="phone" class="phones" aria-label="Телефон" hidden>
+    <div class="phone">
+      <div class="screen">
+        <div class="pbar"><span class="mono">‹</span><span class="mk project"></span><b>Ловля пасхалок</b><span class="mono" style="margin-left:auto">⋯</span></div>
+        <div class="pbody">
+          <div class="tabs" role="tablist"><button aria-selected="true">О проекте</button><button aria-selected="false">Код</button><button aria-selected="false">Скиллы</button></div>
+          <div class="sec"><h3>Описание для ИИ</h3><textarea aria-label="Описание">Игра в Roblox для детей 8–12 лет: игрок ищет пасхалки…</textarea></div>
+          <div class="sec"><div class="h"><h3>Файлы</h3><span class="mono">3</span></div>
+            <div class="file"><span class="ic">MD</span><span class="nm">ТЗ_пасхалки_v2.md</span></div>
+            <div class="file"><span class="ic">PNG</span><span class="nm">макет_магазина.png</span></div>
+            <button class="btn sm">+ Добавить файл</button>
+          </div>
+          <div class="bound"><span class="st-dot"></span><b>Код привязан</b><span class="mono">DESKTOP-E2RTGAK</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="screen" style="grid-template-rows:auto 1fr auto">
+        <div class="pbar"><span class="mono">‹</span><span class="mk task"></span><b>Магазин скинов</b></div>
+        <div class="pbody">
+          <div class="skillbar"><span class="chip lock">roblox-luau</span><span class="chip">roblox-ui-ux ×</span><span class="chip add">+ скилл</span></div>
+          <div class="body-text" style="font-size:13px">Сделай магазин скинов: сетка карточек 2×N, у каждой цена в монетах…</div>
+        </div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <b>Скиллы задачи</b>
+          <div class="sk locked on"><span class="cb"></span><div><div class="nm">roblox-luau</div><div class="d">обязательный для проекта</div></div></div>
+          <div class="sk on"><span class="cb"></span><div><div class="nm">roblox-ui-ux</div><div class="d">интерфейсы Roblox</div></div></div>
+          <div class="sk"><span class="cb"></span><div><div class="nm">db-migrations</div><div class="d">миграции баз данных</div></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="notes">
+    <h2>Что согласовать</h2>
+    <ol>
+      <li>Вход: правый клик по проекту → «Окно проекта…» (на телефоне — долгое нажатие); окно занимает место редактора, три вкладки.</li>
+      <li>«Описание для ИИ» и файлы проекта уходят агентам в каждую задачу проекта; файлы — только для чтения, до 20 МБ на файл.</li>
+      <li>Код: папка на ПК с AiCrew или git-репозиторий (служба скачивает сама в D:\aicrew-work). Привязка — к конкретному ПК; в main по-прежнему переносите только вы.</li>
+      <li>Скиллы проекта: обязательные (в рамке) и запрещённые (зачёркнуты). Скиллы задачи — строка чипов под заголовком AI Task и список с поиском.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-view]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== b.dataset.view; });
+}));
+document.querySelectorAll('.sk:not(.locked)').forEach(s => s.addEventListener('click', () => s.classList.toggle('on')));
+document.querySelectorAll('.opt').forEach(o => o.addEventListener('click', () => {
+  document.querySelectorAll('.opt').forEach(x => x.classList.toggle('on', x === o));
+}));
+</script>
