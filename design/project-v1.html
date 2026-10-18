@@ -222,12 +222,13 @@ label.f { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
 
         <div class="sec">
           <div class="h"><h3>Код проекта</h3><span class="mono">вкладка «Код»</span></div>
-          <div class="radio" role="radiogroup" aria-label="Где код">
-            <div class="opt on"><span class="dot"></span><div class="txt"><b>Папка на ПК с AiCrew</b><span class="hint">код уже лежит на компьютере, где работает служба AiCrew</span></div></div>
-            <div class="opt"><span class="dot"></span><div class="txt"><b>Git-репозиторий</b><span class="hint">служба сама скачает его в D:\aicrew-work\&lt;проект&gt; (GitHub: адрес и ветка)</span></div></div>
-          </div>
           <div class="grid2">
-            <label class="f">Путь к папке на ПК<input type="text" id="path" value="D:\aicrew-work\easter-hunt"></label>
+            <label class="f">Папка на ПК с AiCrew<input type="text" id="path" value="D:\aicrew-work\easter-hunt"></label>
+            <label class="f">Git-репозиторий<input type="text" id="git" value="https://github.com/Lymoos/easter-hunt.git"></label>
+          </div>
+          <p class="hint">Можно указать и то, и другое. Папка есть — служба работает в ней и сверяет её репозиторий с указанным. Папки нет — служба скачает репозиторий в неё (пусто — в D:\aicrew-work\&lt;проект&gt;).</p>
+          <div class="grid2">
+            <label class="f">Основная ветка<input type="text" id="branch" value="main"></label>
             <label class="f">Как проверять код<select id="tpl"><option>Roblox (StyLua, Selene)</option><option>Flutter</option><option>Go</option><option>Web</option><option>Свои команды…</option></select></label>
           </div>
           <div class="bound"><span class="st-dot"></span><b>Привязан</b><span>к ПК <span class="mono">DESKTOP-E2RTGAK</span></span><span class="mono">ветка main → aicrew/integration</span><span style="margin-left:auto" class="hint">в main переносите только вы (promote)</span></div>
@@ -325,7 +326,7 @@ label.f { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
     <ol>
       <li>Вход: правый клик по проекту → «Окно проекта…» (на телефоне — долгое нажатие); окно занимает место редактора, три вкладки.</li>
       <li>«Описание для ИИ» и файлы проекта уходят агентам в каждую задачу проекта; файлы — только для чтения, до 20 МБ на файл.</li>
-      <li>Код: папка на ПК с AiCrew или git-репозиторий (служба скачивает сама в D:\aicrew-work). Привязка — к конкретному ПК; в main по-прежнему переносите только вы.</li>
+      <li>Код: папка на ПК с AiCrew и git-репозиторий — оба поля (решение 19.10.2026). Папка есть — работа в ней, репозиторий сверяется; папки нет — служба скачивает. Привязка — к конкретному ПК; в main по-прежнему переносите только вы.</li>
       <li>Скиллы проекта: обязательные (в рамке) и запрещённые (зачёркнуты). Скиллы задачи — строка чипов под заголовком AI Task и список с поиском.</li>
     </ol>
   </div>
