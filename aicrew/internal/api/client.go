@@ -72,13 +72,22 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, aut
 		return 0, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	limit := int64(8 << 20)
+	raw, isRaw := out.(*[]byte) // файл проекта (7.9) — сырые байты, до 20 МБ
+	if isRaw {
+		limit = 25 << 20
+	}
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if resp.StatusCode >= 400 {
 		var e struct {
 			Error struct{ Code, Message string } `json:"error"`
 		}
 		_ = json.Unmarshal(data, &e)
 		return resp.StatusCode, &APIError{Status: resp.StatusCode, Code: e.Error.Code, Message: e.Error.Message}
+	}
+	if isRaw {
+		*raw = data
+		return resp.StatusCode, nil
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -175,6 +184,8 @@ type Registries struct {
 	Skills      []string `json:"skills"`
 	MCPProfiles []string `json:"mcp_profiles"`
 	Executors   []string `json:"executors"`
+	// SkillInfo — описания скиллов для окна выбора в приложении (7.9).
+	SkillInfo map[string]string `json:"skill_info"`
 }
 
 func (c *Client) RegisterHost(ctx context.Context, name, os string, caps, envs []string, workers []WorkerSpec, reg ...Registries) (Host, error) {
@@ -182,6 +193,9 @@ func (c *Client) RegisterHost(ctx context.Context, name, os string, caps, envs [
 	body := map[string]any{"name": name, "os": os, "capabilities": caps, "environments": envs, "workers": workers}
 	if len(reg) > 0 {
 		body["skills"], body["mcp_profiles"], body["executors"] = reg[0].Skills, reg[0].MCPProfiles, reg[0].Executors
+		if reg[0].SkillInfo != nil {
+			body["skill_info"] = reg[0].SkillInfo
+		}
 	}
 	_, err := c.authed(ctx, http.MethodPost, "/exec/hosts", body, &h)
 	return h, err
@@ -189,6 +203,10 @@ func (c *Client) RegisterHost(ctx context.Context, name, os string, caps, envs [
 
 type Repository struct {
 	ID                  string          `json:"id"`
+	ProjectID           string          `json:"project_id"`
+	GitURL              string          `json:"git_url"`
+	Status              string          `json:"status"`
+	StatusError         string          `json:"status_error"`
 	Name                string          `json:"name"`
 	LocalPath           string          `json:"local_path"`
 	DefaultBranch       string          `json:"default_branch"`
@@ -229,6 +247,46 @@ type Task struct {
 	TouchesUI        bool              `json:"touches_ui"`
 	Executor         string            `json:"executor"` // claude | junior
 	Contract         *Contract         `json:"contract,omitempty"`
+	// Project — описание проекта и список его файлов (7.9).
+	Project *ProjectContext `json:"project,omitempty"`
+}
+
+// ProjectContext — что агенты знают о проекте: описание для ИИ и файлы (ТЗ, макеты).
+type ProjectContext struct {
+	ProjectID   string        `json:"project_id"`
+	Description string        `json:"description"`
+	Files       []ProjectFile `json:"files"`
+}
+
+type ProjectFile struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+}
+
+// ProjectFileData — файл проекта целиком.
+func (c *Client) ProjectFileData(ctx context.Context, projectID, fileID string) ([]byte, error) {
+	var data []byte
+	_, err := c.authed(ctx, http.MethodGet, "/projects/"+projectID+"/files/"+fileID, nil, &data)
+	return data, err
+}
+
+// PendingRepositories — заявки на привязку кода из окна проекта для этого ПК (7.9).
+func (c *Client) PendingRepositories(ctx context.Context) ([]Repository, error) {
+	var out struct {
+		Repos []Repository `json:"repositories"`
+	}
+	_, err := c.authed(ctx, http.MethodGet, "/exec/repositories/pending", nil, &out)
+	return out.Repos, err
+}
+
+// ReportRepository — итог заявки: папка привязана (localPath) или причина отказа (failure).
+func (c *Client) ReportRepository(ctx context.Context, repoID, localPath, failure string) error {
+	_, err := c.authed(ctx, http.MethodPost, "/exec/repositories/"+repoID+"/bound",
+		map[string]string{"local_path": localPath, "error": failure}, nil)
+	return err
 }
 
 // Contract — граница работы Junior: файлы, которые он может менять, и тесты-контракт, которые он должен оживить

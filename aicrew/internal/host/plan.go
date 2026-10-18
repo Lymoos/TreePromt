@@ -52,6 +52,14 @@ func (r *run) plan(log *slog.Logger) {
 	}
 	defer h.Git.RemoveTempWorktree(ctx, repo.LocalPath, name)
 
+	// 7.9: Manager знает проект — описание идёт перед запросом (файлы ему не нужны, план строится по коду и описанию).
+	if t.Project != nil {
+		var redact func(string) string
+		if h.Scanner != nil {
+			redact = h.Scanner.Redact
+		}
+		t.Prompt = projectBlock(t.Project, nil, "", redact) + t.Prompt
+	}
 	p, usage, err := h.Planner.Plan(r.ctx, t, path, h.Catalog)
 	log.Info("manager finished", "turns", usage.Turns, "cost_usd", usage.CostUSD)
 	if err != nil {

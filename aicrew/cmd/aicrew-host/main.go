@@ -539,7 +539,10 @@ func runHost(ctx context.Context, e *env) error {
 		executors = append(executors, manager.Option{Name: "codex", Description: "OpenAI Codex (ChatGPT subscription): any coding task; " +
 			"it runs in parallel with claude, so give independent tasks to different executors to finish sooner"})
 	}
-	reg := api.Registries{Skills: skillReg.Names(), MCPProfiles: mcpReg.ProfileNames()}
+	reg := api.Registries{Skills: skillReg.Names(), MCPProfiles: mcpReg.ProfileNames(), SkillInfo: map[string]string{}}
+	for _, sk := range skillReg.All() {
+		reg.SkillInfo[sk.Name] = sk.Description // для окна выбора скиллов в приложении (7.9)
+	}
 	for _, x := range executors {
 		reg.Executors = append(reg.Executors, x.Name)
 	}
@@ -600,6 +603,10 @@ func runHost(ctx context.Context, e *env) error {
 	}
 	log.Info("aicrew-host started", "host", h.ID, "worker", workerID, "repositories", len(paths), "orphans_removed", len(removed),
 		"skills", len(reg.Skills), "mcp_profiles", reg.MCPProfiles, "executors", reg.Executors, "vision_qa", visionQA != nil, "environments", envs)
+	// 7.9: заявки на привязку кода из окна проекта (папка и/или git-адрес).
+	home, _ := os.UserHomeDir()
+	go host.Binder{API: e.client, R: run, WorkRoot: e.cfg.WorkRoot, Owner: home, Log: log.With("part", "bind")}.
+		Run(ctx, 30*time.Second, nil)
 	if codex != nil {
 		hst.Codex = codex
 		// Очередь Codex — копия хоста со своим работником: задачи Codex идут параллельно с Claude.

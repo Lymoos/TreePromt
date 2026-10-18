@@ -287,6 +287,11 @@ func (r *run) pipeline() error {
 			return err
 		}
 	}
+	projectCleanup, err := r.attachProject(&req, role)
+	defer projectCleanup()
+	if err != nil {
+		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "project_files_failed", Message: err.Error()}
+	}
 	attached, cleanup, err := r.attachSkills(&req)
 	if err != nil {
 		return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "skills_failed", Message: err.Error()}
