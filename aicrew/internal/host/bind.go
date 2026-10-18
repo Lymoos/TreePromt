@@ -149,8 +149,16 @@ func within(path, root string) bool {
 	return p == r || strings.HasPrefix(p, r+string(filepath.Separator))
 }
 
+// samePath — одна и та же папка. Сравниваются сами папки: на Windows путь может прийти в коротком виде
+// (C:\Users\RUNNER~1\…), а git отвечает полным.
 func samePath(a, b string) bool {
-	return strings.EqualFold(filepath.Clean(filepath.FromSlash(a)), filepath.Clean(filepath.FromSlash(b)))
+	a, b = filepath.Clean(filepath.FromSlash(a)), filepath.Clean(filepath.FromSlash(b))
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	sa, errA := os.Stat(a)
+	sb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
 
 var sshURL = regexp.MustCompile(`^git@([^:]+):(.+)$`)
