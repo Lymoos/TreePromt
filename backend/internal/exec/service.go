@@ -148,6 +148,8 @@ type Repository struct {
 	GitURL      string `json:"git_url"`
 	Status      string `json:"status"`
 	StatusError string `json:"status_error"`
+	// SkillPolicy — обязательные и запрещённые скиллы ({"required":[…],"forbidden":[…]}), для окна проекта.
+	SkillPolicy json.RawMessage `json:"skill_policy,omitempty"`
 }
 
 func requireProjectWrite(ctx context.Context, q pgx.Tx, userID, projectID uuid.UUID) error {
@@ -1310,7 +1312,7 @@ func (s *Service) ListTasks(ctx context.Context, userID uuid.UUID, projectID *uu
 
 func (s *Service) ListRepositories(ctx context.Context, userID uuid.UUID) ([]Repository, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch,
-			r.verification_profile, r.git_url, r.status, r.status_error
+			r.verification_profile, r.git_url, r.status, r.status_error, r.skill_policy
 		FROM exec.repositories r JOIN core.project_access a ON a.project_id = r.project_id AND a.user_id = $1
 		ORDER BY r.created_at`, userID)
 	if err != nil {
@@ -1334,6 +1336,7 @@ func (s *Service) KeepWorktrees(ctx context.Context, id Identity) ([]uuid.UUID, 
 
 // WorkerView — исполнитель для канбана: «аватар агента» из реестра (ТЗ п. 8.1).
 type WorkerView struct {
+	HostID      uuid.UUID `json:"host_id"` // 7.9: окно проекта выбирает ПК для привязки кода
 	HostName    string    `json:"host_name"`
 	HostStatus  string    `json:"host_status"`
 	Kind        string    `json:"kind"`
@@ -1344,7 +1347,7 @@ type WorkerView struct {
 }
 
 func (s *Service) ListWorkers(ctx context.Context, userID uuid.UUID) ([]WorkerView, error) {
-	rows, err := s.pool.Query(ctx, `SELECT h.name, CASE WHEN h.last_seen_at > now() - interval '2 minutes' THEN 'online' ELSE 'offline' END,
+	rows, err := s.pool.Query(ctx, `SELECT h.id, h.name, CASE WHEN h.last_seen_at > now() - interval '2 minutes' THEN 'online' ELSE 'offline' END,
 			w.kind, w.model, w.status, w.heartbeat_at, h.executors
 		FROM exec.workers w JOIN exec.hosts h ON h.id = w.host_id WHERE h.user_id = $1 ORDER BY h.name, w.kind`, userID)
 	if err != nil {
@@ -1353,7 +1356,7 @@ func (s *Service) ListWorkers(ctx context.Context, userID uuid.UUID) ([]WorkerVi
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (WorkerView, error) {
 		var v WorkerView
 		var ex []byte
-		err := r.Scan(&v.HostName, &v.HostStatus, &v.Kind, &v.Model, &v.Status, &v.HeartbeatAt, &ex)
+		err := r.Scan(&v.HostID, &v.HostName, &v.HostStatus, &v.Kind, &v.Model, &v.Status, &v.HeartbeatAt, &ex)
 		if err == nil {
 			err = json.Unmarshal(ex, &v.Executors)
 		}

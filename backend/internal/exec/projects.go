@@ -412,7 +412,7 @@ func repoName(localPath, url string) string {
 // PendingRepositories — заявки на привязку для ПК этого устройства.
 func (s *Service) PendingRepositories(ctx context.Context, id Identity) ([]Repository, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch,
-			r.verification_profile, r.git_url, r.status, r.status_error
+			r.verification_profile, r.git_url, r.status, r.status_error, r.skill_policy
 		FROM exec.repositories r JOIN exec.hosts h ON h.id = r.host_id
 		WHERE h.user_id = $1 AND h.device_id = $2 AND r.status = 'pending' ORDER BY r.created_at`, id.UserID, id.DeviceID)
 	if err != nil {
@@ -449,6 +449,6 @@ func (s *Service) ReportRepository(ctx context.Context, id Identity, repoID uuid
 func scanRepository(r pgx.CollectableRow) (Repository, error) {
 	var v Repository
 	err := r.Scan(&v.ID, &v.ProjectID, &v.HostID, &v.Name, &v.LocalPath, &v.DefaultBranch, &v.IntegrationBranch,
-		&v.VerificationProfile, &v.GitURL, &v.Status, &v.StatusError)
+		&v.VerificationProfile, &v.GitURL, &v.Status, &v.StatusError, &v.SkillPolicy)
 	return v, err
 }
