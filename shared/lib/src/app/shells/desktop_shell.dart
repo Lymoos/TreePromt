@@ -26,8 +26,12 @@ class DesktopShell extends ConsumerStatefulWidget {
 }
 
 class _DesktopShellState extends ConsumerState<DesktopShell> {
-  late final TreeActions _actions =
-      TreeActions(ref, openNode: (id) => ref.read(selectedProvider.notifier).state = id);
+  late final TreeActions _actions = TreeActions(ref,
+      openNode: (id) {
+        ref.read(projectWindowProvider.notifier).state = null;
+        ref.read(selectedProvider.notifier).state = id;
+      },
+      openProject: (id) => ref.read(projectWindowProvider.notifier).state = id);
 
   @override
   void initState() {
@@ -64,6 +68,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     final selected = ref.watch(selectedProvider);
     final nodes = ref.watch(nodesProvider).valueOrNull ?? const <TreeNode>[];
     final open = nodes.where((n) => n.id == selected && n.kind != NodeKind.folder && n.deletedAt == null).firstOrNull;
+    final projectWindow = ref.watch(projectWindowProvider);
 
     return Scaffold(
       body: Row(children: [
@@ -73,13 +78,19 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
           child: FadeSwitcher(
             expand: true,
             offset: 0.012,
-            child: open == null
-                ? const _Placeholder(key: ValueKey('placeholder'))
-                : EditorPane(
-                    key: ValueKey(open.id), // другой файл — новый редактор, старый сохраняет текст в dispose
-                    nodeId: open.id,
-                    onClose: () => ref.read(selectedProvider.notifier).state = null,
-                  ),
+            child: projectWindow != null
+                ? ProjectWindow(
+                    key: ValueKey('project-$projectWindow'),
+                    projectId: projectWindow,
+                    onClose: () => ref.read(projectWindowProvider.notifier).state = null,
+                  )
+                : open == null
+                    ? const _Placeholder(key: ValueKey('placeholder'))
+                    : EditorPane(
+                        key: ValueKey(open.id), // другой файл — новый редактор, старый сохраняет текст в dispose
+                        nodeId: open.id,
+                        onClose: () => ref.read(selectedProvider.notifier).state = null,
+                      ),
           ),
         ),
       ]),
@@ -215,6 +226,7 @@ class _Sidebar extends ConsumerWidget {
                         padding: const EdgeInsets.fromLTRB(8, 2, 8, 24),
                         onTap: actions.tap,
                         onSecondaryTap: (r, at) {
+                          if (r.type != RowType.project) ref.read(projectWindowProvider.notifier).state = null;
                           ref.read(selectedProvider.notifier).state = r.id;
                           _menu(context, at, actions.rowMenu(r));
                         },

@@ -7,6 +7,7 @@ import 'package:prompttree_shared/prompttree_shared.dart';
 
 import '../providers.dart';
 import '../widgets/dialogs.dart';
+import '../widgets/skill_picker.dart';
 import 'conflict_screen.dart';
 import 'versions_screen.dart';
 
@@ -502,6 +503,12 @@ class _EditorPaneState extends ConsumerState<EditorPane> {
                     ]),
                 ]),
               ),
+              // 7.9: скиллы, выбранные в самой задаче (обязательные скиллы проекта — в рамке, не снимаются).
+              if (isTask && ref.watch(sessionProvider).mode == SessionMode.server)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: TaskSkillBar(key: ValueKey('skills-${node.id}'), nodeId: node.id, projectId: node.projectId),
+                ),
               AnimatedSize(
                 duration: PtMotion.normal,
                 curve: PtMotion.curve,

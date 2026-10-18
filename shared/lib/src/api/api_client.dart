@@ -264,6 +264,99 @@ class ApiClient {
   }
 
   /// Репозитории AiCrew (привязанные к проектам на ПК с aicrew-host).
+  // ── окно проекта (7.9) ──
+
+  Future<ProjectContextData> projectContext(String projectId) async {
+    final r = await _authed('GET', _u('/projects/$projectId/context'));
+    if (r.statusCode != 200) _fail(r);
+    return ProjectContextData.fromJson(_json(r));
+  }
+
+  Future<void> setProjectDescription(String projectId, String description) async {
+    final r = await _authed('PUT', _u('/projects/$projectId/context'), body: {'description': description});
+    if (r.statusCode >= 300) _fail(r);
+  }
+
+  /// Файл уходит сырым телом, имя — в заголовке X-File-Name (до 20 МБ).
+  Future<ProjectFileInfo> uploadProjectFile(String projectId, String name, List<int> bytes, {String? contentType}) async {
+    Future<http.Response> send(String token) async {
+      final req = http.Request('POST', _u('/projects/$projectId/files'));
+      req.headers.addAll(headers);
+      req.headers['Authorization'] = 'Bearer $token';
+      req.headers['Content-Type'] = contentType ?? 'application/octet-stream';
+      req.headers['X-File-Name'] = Uri.encodeComponent(name);
+      req.bodyBytes = bytes;
+      try {
+        return await http.Response.fromStream(await _http.send(req).timeout(const Duration(minutes: 5)));
+      } on TimeoutException catch (e) {
+        throw NetworkException(e);
+      } on http.ClientException catch (e) {
+        throw NetworkException(e);
+      }
+    }
+
+    var t = await tokens.read();
+    if (t == null) throw AuthRequiredException();
+    var r = await send(t.accessToken);
+    if (r.statusCode == 401) {
+      t = await _refresh(t);
+      r = await send(t.accessToken);
+    }
+    if (r.statusCode != 201) _fail(r);
+    return ProjectFileInfo.fromJson(_json(r));
+  }
+
+  Future<void> deleteProjectFile(String projectId, String fileId) async {
+    final r = await _authed('DELETE', _u('/projects/$projectId/files/$fileId'));
+    if (r.statusCode >= 300) _fail(r);
+  }
+
+  /// Скиллы, выбранные в самой AI Task.
+  Future<List<String>> nodeSkills(String nodeId) async {
+    final r = await _authed('GET', _u('/nodes/$nodeId/skills'));
+    if (r.statusCode != 200) _fail(r);
+    return (_json(r)['skills'] as List? ?? const []).whereType<String>().toList();
+  }
+
+  Future<List<String>> setNodeSkills(String nodeId, List<String> skills) async {
+    final r = await _authed('PUT', _u('/nodes/$nodeId/skills'), body: {'skills': skills});
+    if (r.statusCode != 200) _fail(r);
+    return (_json(r)['skills'] as List? ?? const []).whereType<String>().toList();
+  }
+
+  /// Каталог скиллов AiCrew с описаниями (присылает служба ПК).
+  Future<List<SkillInfo>> skillCatalog() async =>
+      (await _list('/exec/skills', 'skills')).map(SkillInfo.fromJson).toList();
+
+  Future<List<WorkerView>> execWorkers() async => (await _list('/exec/workers', 'workers')).map(WorkerView.fromJson).toList();
+
+  /// Привязка кода из окна проекта: папка и/или git-адрес; служба ПК выполнит заявку.
+  Future<ExecRepository> bindRepository({
+    required String projectId,
+    required String hostId,
+    String localPath = '',
+    String gitUrl = '',
+    String defaultBranch = 'main',
+    String template = '',
+  }) async {
+    final r = await _authed('POST', _u('/exec/repositories/bind'), body: {
+      'project_id': projectId,
+      'host_id': hostId,
+      'local_path': localPath,
+      'git_url': gitUrl,
+      'default_branch': defaultBranch,
+      'verification_profile': template.isEmpty ? <String, dynamic>{} : {'template': template},
+    });
+    if (r.statusCode != 200) _fail(r);
+    return ExecRepository.fromJson(_json(r));
+  }
+
+  Future<void> setSkillPolicy(String repositoryId, {required List<String> required, required List<String> forbidden}) async {
+    final r = await _authed('PUT', _u('/exec/repositories/$repositoryId/skill-policy'),
+        body: {'required': required, 'forbidden': forbidden});
+    if (r.statusCode >= 300) _fail(r);
+  }
+
   Future<List<ExecRepository>> execRepositories() async =>
       (await _list('/exec/repositories', 'repositories')).map(ExecRepository.fromJson).toList();
 

@@ -32,12 +32,15 @@ class TreeAction {
 }
 
 class TreeActions {
-  TreeActions(this.ref, {required this.openNode});
+  TreeActions(this.ref, {required this.openNode, this.openProject});
 
   final WidgetRef ref;
 
   /// Открыть файл: телефон — новый экран, ПК — правая панель.
   final void Function(String nodeId) openNode;
+
+  /// Окно проекта (7.9): ПК — на месте редактора, телефон — отдельный экран. null — пункта нет.
+  final void Function(String projectId)? openProject;
 
   TreeService get _tree => ref.read(treeServiceProvider);
 
@@ -122,6 +125,12 @@ class TreeActions {
   List<TreeAction> rowMenu(TreeRow r) {
     if (r.type == RowType.project) {
       return [
+        if (openProject != null && ref.read(sessionProvider).mode == SessionMode.server)
+          TreeAction(
+            label: 'Окно проекта…',
+            icon: Icons.tune_rounded,
+            run: (_) async => openProject!(r.id),
+          ),
         TreeAction(
           label: 'Переименовать',
           icon: Icons.edit_outlined,

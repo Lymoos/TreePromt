@@ -18,6 +18,7 @@ class MobileShell extends ConsumerWidget {
     final actions = TreeActions(
       ref,
       openNode: (id) => Navigator.push(context, MaterialPageRoute(builder: (_) => EditorScreen(nodeId: id))),
+      openProject: (id) => Navigator.push(context, MaterialPageRoute(builder: (_) => ProjectWindowScreen(projectId: id))),
     );
 
     final header = Padding(

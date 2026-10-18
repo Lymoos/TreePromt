@@ -126,11 +126,13 @@ class Incident {
 }
 
 class WorkerView {
-  const WorkerView({required this.hostName, required this.kind, required this.model, required this.busy, required this.online});
-  final String hostName, kind, model;
+  const WorkerView(
+      {this.hostId = '', required this.hostName, required this.kind, required this.model, required this.busy, required this.online});
+  final String hostId, hostName, kind, model;
   final bool busy, online;
 
   factory WorkerView.fromJson(Map<String, dynamic> j) => WorkerView(
+        hostId: j['host_id'] as String? ?? '',
         hostName: j['host_name'] as String? ?? '',
         kind: j['kind'] as String? ?? '',
         model: j['model'] as String? ?? '',
@@ -155,13 +157,81 @@ class AiCrewBoard {
 }
 
 class ExecRepository {
-  const ExecRepository({required this.id, required this.projectId, required this.name, required this.localPath});
-  final String id, projectId, name, localPath;
+  const ExecRepository({
+    required this.id,
+    required this.projectId,
+    required this.name,
+    required this.localPath,
+    this.hostId = '',
+    this.gitUrl = '',
+    this.defaultBranch = 'main',
+    this.status = 'ready',
+    this.statusError = '',
+    this.template = '',
+    this.requiredSkills = const [],
+    this.forbiddenSkills = const [],
+  });
+  final String id, projectId, name, localPath, hostId, gitUrl, defaultBranch;
 
-  factory ExecRepository.fromJson(Map<String, dynamic> j) => ExecRepository(
+  /// Привязка из окна проекта (7.9): pending — ждёт службу ПК, ready — привязан, failed — см. [statusError].
+  final String status, statusError;
+
+  /// Шаблон проверки (flutter, go, web, roblox) или пусто — свои команды.
+  final String template;
+  final List<String> requiredSkills, forbiddenSkills;
+
+  factory ExecRepository.fromJson(Map<String, dynamic> j) {
+    final profile = j['verification_profile'];
+    final policy = j['skill_policy'];
+    List<String> list(Object? v) => (v as List? ?? const []).whereType<String>().toList();
+    return ExecRepository(
+      id: j['id'] as String,
+      projectId: j['project_id'] as String? ?? '',
+      name: j['name'] as String? ?? '',
+      localPath: j['local_path'] as String? ?? '',
+      hostId: j['host_id'] as String? ?? '',
+      gitUrl: j['git_url'] as String? ?? '',
+      defaultBranch: j['default_branch'] as String? ?? 'main',
+      status: j['status'] as String? ?? 'ready',
+      statusError: j['status_error'] as String? ?? '',
+      template: profile is Map ? profile['template'] as String? ?? '' : '',
+      requiredSkills: policy is Map ? list(policy['required']) : const [],
+      forbiddenSkills: policy is Map ? list(policy['forbidden']) : const [],
+    );
+  }
+}
+
+/// Файл проекта (ТЗ, макет) — агенты видят его только для чтения (7.9).
+class ProjectFileInfo {
+  const ProjectFileInfo({required this.id, required this.name, required this.size, this.contentType = ''});
+  final String id, name, contentType;
+  final int size;
+
+  factory ProjectFileInfo.fromJson(Map<String, dynamic> j) => ProjectFileInfo(
         id: j['id'] as String,
-        projectId: j['project_id'] as String? ?? '',
         name: j['name'] as String? ?? '',
-        localPath: j['local_path'] as String? ?? '',
+        size: (j['size'] as num?)?.toInt() ?? 0,
+        contentType: j['content_type'] as String? ?? '',
       );
+}
+
+/// Что агенты знают о проекте: описание для ИИ и файлы.
+class ProjectContextData {
+  const ProjectContextData({this.description = '', this.files = const []});
+  final String description;
+  final List<ProjectFileInfo> files;
+
+  factory ProjectContextData.fromJson(Map<String, dynamic> j) => ProjectContextData(
+        description: j['description'] as String? ?? '',
+        files: (j['files'] as List? ?? const []).whereType<Map<String, dynamic>>().map(ProjectFileInfo.fromJson).toList(),
+      );
+}
+
+/// Скилл из каталога AiCrew — для выбора в задаче и в окне проекта.
+class SkillInfo {
+  const SkillInfo({required this.name, this.description = ''});
+  final String name, description;
+
+  factory SkillInfo.fromJson(Map<String, dynamic> j) =>
+      SkillInfo(name: j['name'] as String? ?? '', description: j['description'] as String? ?? '');
 }
