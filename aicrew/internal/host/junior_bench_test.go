@@ -18,16 +18,18 @@ import (
 // Сравнение локальных моделей на задачах-контрактах Junior (по желанию, не в CI):
 //
 //	AICREW_BENCH_REPO=<репозиторий с контрактами> AICREW_BENCH_MODELS=qwen3:8b,qwen2.5-coder:7b \
-//	go test -run JuniorBench -v -timeout 3h ./internal/host
+//	[AICREW_BENCH_ONLY=filter] go test -run JuniorBench -v -timeout 3h ./internal/host
 //
 // Каждый контракт — в свежей копии репозитория, до двух попыток (вторая знает, почему не прошла первая),
-// проверка как у службы: только файлы контракта, без метки пропуска, analyze и тесты контракта зелёные.
+// проверка как у службы: метку пропуска снимает служба, только файлы контракта, тесты не тронуты,
+// analyze и тесты контракта зелёные.
 func TestJuniorBench(t *testing.T) {
 	repo := os.Getenv("AICREW_BENCH_REPO")
 	if repo == "" {
 		t.Skip("AICREW_BENCH_REPO is not set")
 	}
 	models := strings.Split(os.Getenv("AICREW_BENCH_MODELS"), ",")
+	only := os.Getenv("AICREW_BENCH_ONLY")
 	contracts := []struct {
 		name, prompt string
 		c            api.Contract
@@ -40,11 +42,20 @@ func TestJuniorBench(t *testing.T) {
 	run := runner.New("docker", "git")
 	var report []string
 	for _, model := range models {
-		passed, firstTry, total := 0, 0, time.Duration(0)
+		passed, firstTry, count, total := 0, 0, 0, time.Duration(0)
 		for _, ct := range contracts {
+			if only != "" && only != ct.name {
+				continue
+			}
+			count++
 			dir := filepath.Join(t.TempDir(), "w")
 			if out, err := exec.Command("git", "clone", "-q", "--local", repo, dir).CombinedOutput(); err != nil {
 				t.Fatalf("clone: %v %s", err, out)
+			}
+			// Как в службе: метку пропуска снимает служба, Junior тесты не трогает.
+			tests, err := unskipContract(dir, &ct.c)
+			if err != nil {
+				t.Fatal(err)
 			}
 			l := &agent.Local{R: run, Image: "aicrew-agent-flutter:local", BaseURL: "http://127.0.0.1:11434", Model: model, NumCtx: 16384}
 			var previous []string
@@ -59,10 +70,10 @@ func TestJuniorBench(t *testing.T) {
 				why := ""
 				if err != nil {
 					why = err.Error()
-				} else if err := checkJuniorContract(dir, changedFiles(t, dir), &ct.c); err != nil {
+				} else if err := checkJuniorContract(dir, changedFiles(t, dir), &ct.c, tests); err != nil {
 					why = err.Error()
 				} else if out, ok := verifyContract(dir, ct.c.Tests[0]); !ok {
-					why = "checks failed: " + out
+					why = "checks failed: " + lastLines(out, 12)
 				}
 				if why == "" {
 					result = fmt.Sprintf("passed on attempt %d", attempt)
@@ -72,14 +83,15 @@ func TestJuniorBench(t *testing.T) {
 					}
 					break
 				}
-				t.Logf("%s / %s attempt %d: %s", model, ct.name, attempt, firstLine(why))
+				diff, _ := exec.Command("git", "-C", dir, "diff", "--", ct.c.Files[0]).Output()
+				t.Logf("%s / %s attempt %d: %s\n--- diff of %s:\n%s", model, ct.name, attempt, why, ct.c.Files[0], lastLines(string(diff), 25))
 				previous = append(previous, why)
 			}
 			took := time.Since(start).Round(time.Second)
 			total += took
 			report = append(report, fmt.Sprintf("%-18s %-7s %-20s turns %-3d %s", model, ct.name, result, turns, took))
 		}
-		report = append(report, fmt.Sprintf("%-18s TOTAL   %d/%d passed, %d on first try, %s", model, passed, len(contracts), firstTry, total))
+		report = append(report, fmt.Sprintf("%-18s TOTAL   %d/%d passed, %d on first try, %s", model, passed, count, firstTry, total))
 	}
 	t.Log("\n" + strings.Join(report, "\n"))
 }
@@ -90,7 +102,8 @@ func changedFiles(t *testing.T, dir string) []string {
 		t.Fatal(err)
 	}
 	var files []string
-	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	// Строка porcelain — «XY путь»: статус занимает первые три символа, поэтому края вывода не обрезаются.
+	for _, l := range strings.Split(strings.TrimRight(string(out), "\r\n"), "\n") {
 		if len(l) > 3 {
 			files = append(files, strings.TrimSpace(l[3:]))
 		}
@@ -103,16 +116,19 @@ func verifyContract(dir, test string) (string, bool) {
 	cmd := exec.Command("docker", "run", "--rm", "-v", dir+":/work", "-w", "/work", "aicrew-agent-flutter:local", "bash", "-c",
 		"flutter pub get >/dev/null 2>&1 && flutter analyze lib/logic test/logic && flutter test "+test)
 	out, err := cmd.CombinedOutput()
-	s := string(out)
-	if len(s) > 600 {
-		s = s[len(s)-600:]
-	}
-	return s, err == nil
+	return string(out), err == nil
 }
 
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+// lastLines — последние n непустых строк (вывод flutter полон строк прогресса).
+func lastLines(s string, n int) string {
+	var keep []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "00:") {
+			keep = append(keep, l)
+		}
 	}
-	return s
+	if len(keep) > n {
+		keep = keep[len(keep)-n:]
+	}
+	return strings.Join(keep, "\n")
 }

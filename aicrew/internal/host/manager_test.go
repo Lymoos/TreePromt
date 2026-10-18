@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -161,14 +162,15 @@ func TestJuniorTasksGoToTheLocalModel(t *testing.T) {
 	junior := &fakeAgent{run: writes("b", "y")}
 	h := newHost(t, srv, claude, fakeVerifier{rep: verify.Report{Passed: true}})
 	h.Junior = junior
+	commitFile(t, repo, "b_test", "t.Skip(\"aicrew-contract\")\n")
 	tk := task(repo)
 	tk.Executor = "junior"
-	tk.Contract = &api.Contract{Files: []string{"b"}, Tests: []string{"b"}}
+	tk.Contract = &api.Contract{Files: []string{"b"}, Tests: []string{"b_test"}}
 	h.Process(context.Background(), tk)
 	if junior.req.Role != "junior" || claude.req.TaskID != "" {
 		t.Fatal("junior task must run on the junior executor")
 	}
-	if !strings.Contains(junior.req.Prompt, "Contract of this task") || !strings.Contains(junior.req.Prompt, api.ContractMarker) {
+	if !strings.Contains(junior.req.Prompt, "Contract of this task") || !strings.Contains(junior.req.Prompt, "Do not change them") {
 		t.Fatalf("junior must get its contract: %s", junior.req.Prompt)
 	}
 	if d := srv.facts[1].Details.(map[string]any); d["executor"] != "junior" {
@@ -176,7 +178,9 @@ func TestJuniorTasksGoToTheLocalModel(t *testing.T) {
 	}
 	srv2 := &fakeServer{}
 	h2 := newHost(t, srv2, claude, fakeVerifier{})
-	tk2 := task(gitRepo(t))
+	repo2 := gitRepo(t)
+	commitFile(t, repo2, "b_test", "t.Skip(\"aicrew-contract\")\n")
+	tk2 := task(repo2)
 	tk2.Executor = "junior"
 	tk2.Contract = tk.Contract
 	h2.Process(context.Background(), tk2)
@@ -232,29 +236,63 @@ func TestWindowsUserTasksRunAsAIWorkerInsideWorkRoot(t *testing.T) {
 	}
 }
 
-// Junior — только по контракту: ничего сверх разрешённых файлов, тесты-контракт без пропуска.
+// commitFile кладёт файл в репозиторий теста отдельным коммитом (основа для worktree задачи).
+func commitFile(t *testing.T, repo, name, body string) {
+	t.Helper()
+	p := filepath.Join(repo, filepath.FromSlash(name))
+	_ = os.MkdirAll(filepath.Dir(p), 0o755)
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "add " + name}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+}
+
+// Junior — только по контракту: служба снимает метку пропуска, Junior пишет код только в файлах контракта
+// и не трогает тесты; файлы, которые пересоздают инструменты Flutter, не считаются его правкой.
 func TestJuniorContractIsEnforced(t *testing.T) {
 	contract := &api.Contract{Files: []string{"lib/filter.dart"}, Tests: []string{"test/filter_test.dart"}}
+	const skipped = "void main() {\n  test('filters', () {}, skip: 'aicrew-contract');\n}\n"
+	const enabled = "void main() {\n  test('filters', () {});\n}\n"
 	cases := map[string]struct {
+		base     string
 		files    map[string]string
 		contract *api.Contract
 		code     string
 	}{
-		"no contract":      {map[string]string{"lib/filter.dart": "x"}, nil, "no_contract"},
-		"outside contract": {map[string]string{"lib/filter.dart": "x", "test/filter_test.dart": "ok", "lib/main.dart": "hack"}, contract, "contract_broken"},
-		"still skipped":    {map[string]string{"lib/filter.dart": "x", "test/filter_test.dart": "skip: '" + api.ContractMarker + "'"}, contract, "contract_unmet"},
-		"done":             {map[string]string{"lib/filter.dart": "x", "test/filter_test.dart": "test passes"}, contract, ""},
+		"no contract":        {skipped, map[string]string{"lib/filter.dart": "x"}, nil, "no_contract"},
+		"tests not skipped":  {enabled, map[string]string{"lib/filter.dart": "x"}, contract, "contract_missing"},
+		"outside contract":   {skipped, map[string]string{"lib/filter.dart": "x", "lib/main.dart": "hack"}, contract, "contract_broken"},
+		"weakened the tests": {skipped, map[string]string{"lib/filter.dart": "x", "test/filter_test.dart": "void main() {}"}, contract, "contract_broken"},
+		"tool files are ok": {skipped, map[string]string{"lib/filter.dart": "x",
+			"linux/flutter/generated_plugin_registrant.cc": "// regenerated"}, contract, ""},
+		"done": {skipped, map[string]string{"lib/filter.dart": "x"}, contract, ""},
 	}
 	for name, c := range cases {
 		srv := &fakeServer{}
 		h := newHost(t, srv, &fakeAgent{}, fakeVerifier{rep: verify.Report{Passed: true}})
-		h.Junior = &fakeAgent{run: writesAll(c.files)}
-		tk := task(gitRepo(t))
+		var sawTest string
+		h.Junior = &fakeAgent{run: func(ctx context.Context, req agent.Request) (agent.Result, error) {
+			b, _ := os.ReadFile(filepath.Join(req.Workdir, "test", "filter_test.dart"))
+			sawTest = string(b)
+			return writesAll(c.files)(ctx, req)
+		}}
+		repo := gitRepo(t)
+		commitFile(t, repo, "test/filter_test.dart", c.base)
+		tk := task(repo)
 		tk.Executor, tk.Contract = "junior", c.contract
 		h.Process(context.Background(), tk)
 		_, f := last(srv)
 		if f.FailureCode != c.code {
 			t.Errorf("%s: failure %q, want %q", name, f.FailureCode, c.code)
+		}
+		if name == "done" && strings.ReplaceAll(sawTest, "\r\n", "\n") != enabled {
+			t.Errorf("junior must get the tests already enabled, got %q", sawTest)
 		}
 	}
 }

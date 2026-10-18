@@ -119,6 +119,13 @@ func (l *Local) Run(ctx context.Context, req Request) (Result, error) {
 		}
 		for _, c := range calls {
 			if c.Function.Name == "finish" {
+				// «Готово» без единой правки (замер 18.10.2026: qwen2.5-coder сразу объявлял готовность).
+				if !s.changed && !req.ReadOnly && nudges < 2 {
+					nudges++
+					msgs = append(msgs, chatMessage{Role: "tool", ToolName: "finish", Content: "Not finished: you have not " +
+						"changed any file yet. Implement the code with edit_file or write_file, run the checks, then call finish."})
+					continue
+				}
 				return Result{Summary: argString(c.Function.Arguments, "summary"), Usage: usage}, nil
 			}
 			if l.Log != nil {
@@ -635,10 +642,16 @@ func (s *localSession) editFile(p, oldS, newS string) (string, error) {
 	if crlf {
 		text = strings.ReplaceAll(text, "\r\n", "\n")
 	}
+	oldS, newS = strings.ReplaceAll(oldS, "\r\n", "\n"), strings.ReplaceAll(newS, "\r\n", "\n")
 	switch n := strings.Count(text, oldS); {
 	case oldS == "":
 		return "", errors.New("old_string is empty; use write_file to create a file")
 	case n == 0:
+		// Маленькие модели повторяют одну и ту же неверную правку: сразу показываем, что в файле на самом деле.
+		if len(text) <= 6000 {
+			return "", fmt.Errorf("old_string not found. The file %s is exactly (without line numbers):\n%s\n"+
+				"Copy the exact text, or rewrite the whole file with write_file", p, text)
+		}
 		return "", errors.New("old_string not found; read the file again and copy the exact text")
 	case n > 1:
 		return "", fmt.Errorf("old_string occurs %d times; include more surrounding lines to make it unique", n)

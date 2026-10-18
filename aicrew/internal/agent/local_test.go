@@ -299,3 +299,23 @@ func TestLocalAgentStopsLoopingEarly(t *testing.T) {
 		t.Fatal("answer length must be capped")
 	}
 }
+
+func TestLocalAgentRejectsFinishWithoutChanges(t *testing.T) {
+	l, fo, _, dir := newLocal(t,
+		call("finish", map[string]any{"summary": "done"}),
+		call("edit_file", map[string]any{"path": "main.dart", "old_string": "print('nope');", "new_string": "x"}),
+		call("write_file", map[string]any{"path": "main.dart", "content": "void main() {}"}),
+		call("finish", map[string]any{"summary": "rewritten"}),
+	)
+	res, err := l.Run(context.Background(), Request{TaskID: "t", Attempt: 1, Workdir: dir, Prompt: "p"})
+	if err != nil || res.Summary != "rewritten" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	outs := fo.lastToolOutputs()
+	if !strings.Contains(outs[0], "not changed any file") {
+		t.Fatalf("early finish must be rejected: %q", outs[0])
+	}
+	if !strings.Contains(outs[1], "print('old');") {
+		t.Fatalf("a failed edit must show the real file: %q", outs[1])
+	}
+}

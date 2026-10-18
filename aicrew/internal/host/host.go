@@ -280,8 +280,12 @@ func (r *run) pipeline() error {
 		Timeout: time.Duration(t.AgentRuntimeSec) * time.Second, Previous: lessons(t.PreviousAttempts),
 		Checks: profile.Commands(),
 	}
+	var contractTests map[string]string
 	if role == "junior" {
 		req.Prompt += juniorPrompt(t.Contract)
+		if contractTests, err = unskipContract(path, t.Contract); err != nil {
+			return err
+		}
 	}
 	attached, cleanup, err := r.attachSkills(&req)
 	if err != nil {
@@ -323,7 +327,7 @@ func (r *run) pipeline() error {
 		return &agent.Failure{Class: "AGENT_ERROR", Code: "no_changes", Message: "agent finished without changing any file"}
 	}
 	if role == "junior" {
-		if err := checkJuniorContract(path, facts.ChangedFiles, t.Contract); err != nil {
+		if err := checkJuniorContract(path, facts.ChangedFiles, t.Contract, contractTests); err != nil {
 			return err
 		}
 	}
