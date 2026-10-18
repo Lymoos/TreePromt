@@ -64,6 +64,9 @@ non-visual pieces with an exact target, and always as a sandwich:
      to make pass]}; its prompt says exactly which functions to implement; it must remove the skip and make the tests pass;
   3. a "claude" (or "codex") task depends on the junior tasks and integrates their work into the feature and reviews it.
 Never give junior anything the user sees (touches_ui), design decisions, or work without a contract test.
+Keep each junior task to one simple function (or a few trivial getters). Parsing, validation, error handling and
+anything with several interacting parts go to claude or codex (measured 18-19.10.2026: the local model solved 3 of 4
+such contracts, failing the JSON one with error handling).
 Use junior only when it saves real work (several independent pieces); otherwise give the whole task to claude.
 
 `)
