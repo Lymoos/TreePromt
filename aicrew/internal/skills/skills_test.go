@@ -19,7 +19,7 @@ func TestRealCatalogLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "dart-clean-code,db-migrations,flutter-widget-tests,frontend-design,go-backend,mcp-builder,prompttree-conventions," +
-		"prompttree-design-system,roblox-luau,testing-strategy,web-apps,webapp-testing"
+		"prompttree-design-system,roblox-luau,roblox-ui-ux,testing-strategy,web-apps,webapp-testing"
 	if got := strings.Join(r.Names(), ","); got != want {
 		t.Fatalf("skills: %s", got)
 	}

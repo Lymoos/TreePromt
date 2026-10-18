@@ -16,6 +16,7 @@
 | `db-migrations` | миграции PostgreSQL (goose) и Drift | свой |
 | `web-apps` | веб: Flutter Web и обычные веб-проекты | свой |
 | `roblox-luau` | игры Roblox на Luau, проверка в Studio через MCP | свой |
+| `roblox-ui-ux` | интерфейсы Roblox: токены, раскладка, анимации, мобильные, чек-лист против «ИИ-шаблона» | свой (черновик написал Claude в AiCrew 19.10.2026, доработан) |
 | `frontend-design` | дизайн новых интерфейсов | Anthropic |
 | `webapp-testing` | проверка веб-приложений в браузере (Playwright) | Anthropic |
 | `mcp-builder` | создание MCP-серверов | Anthropic |
