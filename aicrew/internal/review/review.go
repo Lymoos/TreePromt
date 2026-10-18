@@ -217,6 +217,35 @@ func (c Claude) Review(ctx context.Context, role string, t *api.Task, workdir st
 	return v, nil
 }
 
+// Codex — ревью через Codex (7.8): тот же текст, worktree и песочница только для чтения.
+// Нужен для перекрёстного ревью: код Claude смотрит модель другой компании.
+type Codex struct {
+	Agent   *agent.Codex
+	Timeout time.Duration
+}
+
+func (c Codex) Review(ctx context.Context, role string, t *api.Task, workdir string, f Facts) (api.Verdict, error) {
+	system, user := Prompt(role, f)
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	res, err := c.Agent.Run(ctx, agent.Request{
+		TaskID: t.ID, Attempt: t.Attempt, Role: role, Workdir: workdir, Timeout: timeout,
+		Prompt: system + "\n\nYou may read files in the current directory for context. Do not modify anything.\n\n" + user,
+		Raw:    true, ReadOnly: true, Name: fmt.Sprintf("aicrew-review-%s-%d-%s", t.ID, t.Attempt, role),
+	})
+	if err != nil {
+		return api.Verdict{}, err
+	}
+	v, err := Parse(res.Summary)
+	if err != nil {
+		return v, &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "review_unparsable", Message: err.Error()}
+	}
+	v.Reviewer = role + ":" + c.Agent.Name()
+	return v, nil
+}
+
 // Chain — сначала основной ревьюер, при ErrReviewerNotConfigured — запасной (решение 7.4/1).
 type Chain struct {
 	Primary, Fallback Reviewer

@@ -47,8 +47,12 @@ type Host struct {
 	Agent    agent.Provider
 	Verifier Verifier
 	Reviewer review.Reviewer
-	// 7.5: Junior (Claude Code на локальной модели), реестры скиллов и MCP, Manager.
-	Junior  agent.Provider
+	// 7.5: Junior (свой исполнитель на локальной модели), реестры скиллов и MCP, Manager.
+	Junior agent.Provider
+	// 7.8: Codex — второй исполнитель; Lane — какая это очередь хоста, Lanes — общее состояние очередей.
+	Codex   agent.Provider
+	Lane    string
+	Lanes   *Lanes
 	Skills  *skills.Registry
 	MCP     *mcp.Registry
 	Planner Planner
@@ -70,6 +74,14 @@ type Host struct {
 // Run — цикл: брать задачи по одной (решение 7.1: одна задача за раз), пока не отменят контекст.
 func (h *Host) Run(ctx context.Context) error {
 	for {
+		if !h.Lanes.mayStart(h.Lane) {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(h.PollEvery):
+			}
+			continue
+		}
 		t, err := h.API.Claim(ctx, h.WorkerID)
 		if errors.Is(err, api.ErrAuthRequired) {
 			return err
@@ -156,7 +168,11 @@ func (h *Host) Process(parent context.Context, t *api.Task) {
 		t.Prompt = h.Scanner.Redact(t.Prompt) // текст задачи уходит моделям только без секретов (ТЗ п. 12)
 	}
 	log := h.Log.With("task", t.ID, "attempt", t.Attempt, "kind", kind)
-	log.Info("task claimed", "title", t.Title)
+	log.Info("task claimed", "title", t.Title, "lane", h.Lane, "executor", t.Executor)
+	if h.Lanes != nil {
+		h.Lanes.set(h.Lane, t.Executor)
+		defer h.Lanes.set(h.Lane, "")
+	}
 	if kind == api.KindPlan {
 		// У плана свой lease без heartbeat (Manager работает минуты) и свой отчёт серверу.
 		r.plan(log)
@@ -241,6 +257,12 @@ func (r *run) pipeline() error {
 			return &agent.Failure{Class: "AGENT_ERROR", Code: "no_contract", Message: "junior works only under a contract inside a Manager plan"}
 		}
 		ag, role = h.Junior, "junior"
+	}
+	if t.Executor == "codex" {
+		if h.Codex == nil {
+			return &agent.Failure{Class: "ENVIRONMENT_FAILURE", Code: "no_codex", Message: "Codex login is not saved on this host"}
+		}
+		ag, role = h.Codex, "codex"
 	}
 	if t.ExecutionEnv == "windows_user" {
 		// Окружение windows_user (Roblox): исполнитель и проверки — от ai_worker, без контейнера.

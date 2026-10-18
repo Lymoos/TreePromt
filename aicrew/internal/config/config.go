@@ -36,6 +36,8 @@ type Config struct {
 	WorkerTools  map[string]string `json:"worker_tools"`  // инструменты проверок: selene, stylua
 	RobloxStudio bool              `json:"roblox_studio"` // у ai_worker установлен Roblox Studio с включённым MCP
 	VisionModel  string            `json:"vision_model"`
+	// CodexModel — модель Codex (7.8); пусто — модель по умолчанию у подписки.
+	CodexModel string `json:"codex_model"`
 	// Сколько задач одновременно (решение 7.1: одна).
 	Concurrency int `json:"concurrency"`
 }

@@ -64,6 +64,9 @@ func strp(s string) *string { return &s }
 
 // ── хосты и воркеры ──
 
+// WorkerCodex — вид работника очереди Codex (7.8).
+const WorkerCodex = "codex"
+
 type WorkerSpec struct {
 	Kind  string `json:"kind"`
 	Model string `json:"model"`
@@ -238,7 +241,7 @@ type NewTask struct {
 	RequiredSkills []string `json:"required_skills"`
 	MCPProfile     string   `json:"mcp_profile"`
 	TouchesUI      bool     `json:"touches_ui"`
-	Executor       string   `json:"executor"` // claude | junior (junior — только в плане Manager'а, по контракту)
+	Executor       string   `json:"executor"` // claude | codex | junior (junior — только в плане Manager'а, по контракту)
 
 	planID   *uuid.UUID
 	contract *Contract
@@ -445,8 +448,21 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		return nil, err
 	}
 	now := s.now()
+	// Очереди хоста (7.8): работник вида codex берёт только задачи Codex и идёт параллельно с Claude;
+	// слияние, откат и планы — только у основного работника, чтобы integration двигалась строго по одной.
+	var kind string
+	if err := tx.QueryRow(ctx, `SELECT kind FROM exec.workers WHERE id = $1`, workerID).Scan(&kind); err != nil {
+		return nil, err
+	}
+	executors := []string{"claude", "junior"}
+	if kind == WorkerCodex {
+		executors = []string{"codex"}
+	}
 	// Сначала очередь слияния: integration должна продвинуться раньше, чем начнётся следующая задача.
-	job, err := s.claimMergeJob(ctx, tx, hostID, workerID, now)
+	var job *ClaimedTask
+	if kind != WorkerCodex {
+		job, err = s.claimMergeJob(ctx, tx, hostID, workerID, now)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +474,10 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		return job, nil
 	}
 	// Затем планы Manager'а: декомпозиция дешёвая, а её задачи встают в ту же очередь.
-	plan, err := s.claimPlan(ctx, tx, hostID, workerID, now)
+	var plan *ClaimedTask
+	if kind != WorkerCodex {
+		plan, err = s.claimPlan(ctx, tx, hostID, workerID, now)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -481,13 +500,14 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		  AND h.environments @> to_jsonb(t.execution_env)
 		  AND h.capabilities @> t.required_capabilities
 		  AND h.executors @> to_jsonb(t.executor)
+		  AND t.executor = ANY($3)
 		  AND `+pausedSQL+` AND `+nightStopSQL+`
 		  AND NOT EXISTS (
 			SELECT 1 FROM exec.task_dependencies d JOIN exec.tasks dt ON dt.id = d.depends_on_task_id
 			WHERE d.task_id = t.id AND dt.status <> 'DONE')
 		ORDER BY t.created_at
 		LIMIT 1
-		FOR UPDATE OF t SKIP LOCKED`, hostID, now).
+		FOR UPDATE OF t SKIP LOCKED`, hostID, now, executors).
 		Scan(&t.ID, &t.Attempt, &t.Title, &t.Prompt, &t.ExecutionEnv, &t.ReviewLevel, &t.AgentRuntimeSec, &t.VerifyRuntimeSec,
 			&t.RequiredSkills, &t.MCPProfile, &t.TouchesUI, &t.Executor, &contract,
 			&t.Repository.ID, &t.Repository.ProjectID, &t.Repository.HostID, &t.Repository.Name, &t.Repository.LocalPath,

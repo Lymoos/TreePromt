@@ -268,11 +268,12 @@ class ApiClient {
       (await _list('/exec/repositories', 'repositories')).map(ExecRepository.fromJson).toList();
 
   /// AI Task из дерева → задача AiCrew. Текст сервер берёт из итоговой задачи узла.
-  /// Исполнитель — всегда Claude: Junior работает только по контракту внутри плана Manager'а.
+  /// Исполнитель — Claude или Codex; Junior работает только по контракту внутри плана Manager'а.
   Future<String> createExecTask({
     required String nodeId,
     required String repositoryId,
     String mode = 'manual',
+    String executor = 'claude',
     String reviewLevel = 'logic',
     bool touchesUI = false,
   }) async {
@@ -280,6 +281,7 @@ class ApiClient {
       'node_id': nodeId,
       'repository_id': repositoryId,
       'execution_mode': mode,
+      'executor': executor,
       'review_level': reviewLevel,
       'touches_ui': touchesUI,
     });

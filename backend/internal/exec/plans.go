@@ -288,18 +288,18 @@ func ValidateProposal(p *Proposal, l hostLists) error {
 			return err
 		}
 	}
-	// Junior никогда не работает сам по себе: перед ним задача Claude с тестами, после — задача Claude, которая собирает.
+	// Junior никогда не работает сам по себе: перед ним задача Claude или Codex с тестами, после — задача, которая собирает.
 	for i, t := range p.Tasks {
 		if t.Executor != "junior" {
 			continue
 		}
 		before := false
 		for _, d := range t.DependsOn {
-			before = before || p.Tasks[d].Executor == "claude"
+			before = before || strongExecutor(p.Tasks[d].Executor)
 		}
 		after := false
 		for _, o := range p.Tasks {
-			if o.Executor != "claude" {
+			if !strongExecutor(o.Executor) {
 				continue
 			}
 			for _, d := range o.DependsOn {
@@ -307,8 +307,8 @@ func ValidateProposal(p *Proposal, l hostLists) error {
 			}
 		}
 		if !before || !after {
-			return fmt.Errorf("task %d: a junior task must depend on a claude task that writes its contract tests "+
-				"and be followed by a claude task that integrates it", i)
+			return fmt.Errorf("task %d: a junior task must depend on a claude or codex task that writes its contract tests "+
+				"and be followed by a claude or codex task that integrates it", i)
 		}
 	}
 	if _, err := topoOrder(p.Tasks); err != nil {
@@ -319,6 +319,9 @@ func ValidateProposal(p *Proposal, l hostLists) error {
 	}
 	return nil
 }
+
+// strongExecutor — кто может писать контракт для Junior и собирать его работу (7.7, 7.8).
+func strongExecutor(e string) bool { return e == "claude" || e == "codex" }
 
 func validateContract(i int, t *PlanTask) error {
 	if t.Executor != "junior" {

@@ -712,7 +712,7 @@ class _TaskCardState extends ConsumerState<TaskCard> {
   Widget build(BuildContext context) {
     final t = widget.task;
     final a = widget.approval;
-    final executor = t.executor == 'junior' ? 'Junior · Qwen' : 'Claude';
+    final executor = switch (t.executor) { 'junior' => 'Junior · Qwen', 'codex' => 'Codex', _ => 'Claude' };
     final meta = [
       _statusText(t),
       if (t.attempt > 0) 'попытка ${t.attempt}${t.maxAttempts >= t.attempt ? '/${t.maxAttempts}' : ''}',

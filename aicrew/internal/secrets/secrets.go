@@ -15,6 +15,8 @@ const (
 	ClaudeToken  = "claude_code_oauth_token"
 	// WorkerPassword — пароль ai_worker для окружения windows_user (вводит владелец).
 	WorkerPassword = "worker_password"
+	// CodexAuth — вход Codex по подписке ChatGPT: содержимое ~/.codex/auth.json (вход делает владелец, 7.8).
+	CodexAuth = "codex_auth_json"
 )
 
 var ErrMissing = errors.New("secret is not set")

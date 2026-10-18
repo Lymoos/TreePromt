@@ -1,4 +1,4 @@
-# Окружение container (решение 7.1): Flutter + Claude Code CLI, без секретов внутри.
+# Окружение container (решение 7.1): Flutter + Claude Code CLI + Codex CLI (7.8), без секретов внутри.
 # Токен подписки передаётся только на время запуска (CLAUDE_CODE_OAUTH_TOKEN), worktree монтируется в /work.
 #   docker build -t aicrew-agent-flutter:local aicrew/images/agent-flutter
 #
@@ -8,15 +8,17 @@ FROM node:22-bookworm-slim
 
 ARG FLUTTER_VERSION=3.27.3
 ARG CLAUDE_CODE_VERSION=2.1.287
+ARG CODEX_VERSION=0.160.0
 
 # Каждый шаг падает сам по себе: никаких «curl | bash», где ошибка теряется в конвейере.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git curl unzip xz-utils zip \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
  && npm cache clean --force \
- && claude --version
+ && claude --version \
+ && codex --version
 
 # Агент работает не от root; Flutter пишет в свой кэш — SDK принадлежит пользователю агента.
 RUN useradd -m -u 1001 agent \

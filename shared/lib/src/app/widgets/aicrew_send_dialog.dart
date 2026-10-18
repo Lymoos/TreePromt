@@ -29,6 +29,7 @@ class _SendDialogState extends ConsumerState<_SendDialog> {
   List<ExecRepository>? _repos;
   String? _repo;
   bool _plan = false;
+  String _executor = 'claude';
   String _mode = 'manual';
   bool _techLead = false;
   bool _touchesUI = false;
@@ -81,6 +82,7 @@ class _SendDialogState extends ConsumerState<_SendDialog> {
           nodeId: widget.nodeId,
           repositoryId: _repo!,
           mode: _mode,
+          executor: _executor,
           reviewLevel: _techLead ? 'tech_lead' : 'logic',
           touchesUI: _touchesUI,
         );
@@ -164,15 +166,20 @@ class _SendDialogState extends ConsumerState<_SendDialog> {
                 onChanged: (v) => setState(() => _repo = v),
               ),
               label('Как выполнять'),
-              choice(false, _plan, 'Одной задачей', (v) => _plan = v, hint: 'всё делает Claude'),
+              choice(false, _plan, 'Одной задачей', (v) => _plan = v),
               choice(true, _plan, 'Через Manager', (v) => _plan = v,
-                  hint: 'Claude разложит задачу; механические части по его тестам сделает локальная Qwen, Claude соберёт'),
+                  hint: 'Claude разложит задачу и раздаст части Claude и Codex; механические — локальной Qwen по их тестам'),
+              if (!_plan) ...[
+                label('Исполнитель'),
+                choice('claude', _executor, 'Claude', (v) => _executor = v),
+                choice('codex', _executor, 'Codex', (v) => _executor = v, hint: 'по подписке ChatGPT; идёт параллельно с Claude'),
+              ],
               label('Режим'),
               choice('manual', _mode, 'Ручной', (v) => _mode = v, hint: 'перед слиянием спросят вас'),
               choice('semi_auto', _mode, 'Полуавтомат', (v) => _mode = v, hint: 'проверенное сливается само'),
               if (!_plan) ...[
                 label('Ревью'),
-                check(_techLead, '+ Tech Lead', (v) => _techLead = v, hint: 'ещё одно ревью — для сложных задач'),
+                check(_techLead, '+ Tech Lead', (v) => _techLead = v, hint: 'ревью моделью другой компании — для сложных задач'),
                 check(_touchesUI, 'Меняет интерфейс', (v) => _touchesUI = v, hint: 'Vision QA посмотрит на снимки экрана'),
               ],
             ],

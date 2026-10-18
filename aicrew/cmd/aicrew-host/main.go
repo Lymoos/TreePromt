@@ -69,6 +69,7 @@ func usage() {
   add-repo           привязать локальный репозиторий: -project <id> -path <папка> [-name] [-branch] [-profile файл.json]
   run                брать и выполнять задачи, сливать проверенные в integration-ветку
   set-worker         окружение windows_user: пароль ai_worker (-user, -roblox, -clipboard)
+  set-codex-auth     сохранить вход Codex (после codex login): -file ~/.codex/auth.json
   set-junior         локальная модель Junior: -model qwen3:8b -context 16384
   set-skills         скиллы репозитория: -path <папка> -required a,b -forbidden c
   set-profile        профиль проверки репозитория: -path <папка> -profile файл.json ({"template":"flutter"})
@@ -279,6 +280,29 @@ func dispatch(cmd string, args []string) error {
 
 	case "run":
 		return runHost(ctx, e)
+
+	case "set-codex-auth":
+		// Вход Codex делает владелец сам (`codex login`, аккаунт ChatGPT); служба только забирает файл входа
+		// и хранит его зашифрованным. Содержимое файла не печатается.
+		fs := flag.NewFlagSet("set-codex-auth", flag.ExitOnError)
+		home, _ := os.UserHomeDir()
+		file := fs.String("file", filepath.Join(home, ".codex", "auth.json"), "файл входа Codex")
+		_ = fs.Parse(args)
+		b, err := os.ReadFile(*file)
+		if err != nil {
+			return fmt.Errorf("нет файла входа Codex (%v): сначала выполните codex login", err)
+		}
+		var auth struct {
+			Tokens json.RawMessage `json:"tokens"`
+		}
+		if json.Unmarshal(b, &auth) != nil || len(auth.Tokens) == 0 || string(auth.Tokens) == "null" {
+			return errors.New("в файле нет входа по подписке ChatGPT: выполните codex login и войдите аккаунтом ChatGPT")
+		}
+		if err := e.sec.Set(secrets.CodexAuth, string(b)); err != nil {
+			return err
+		}
+		fmt.Println("Вход Codex сохранён (зашифрован ключом вашей учётной записи Windows). Перезапустите службу — появится очередь Codex.")
+		return nil
 
 	case "set-junior":
 		fs := flag.NewFlagSet("set-junior", flag.ExitOnError)
@@ -508,12 +532,22 @@ func runHost(ctx context.Context, e *env) error {
 			}
 		}
 	}
+	// 7.8: Codex — второй исполнитель в своей очереди, если владелец сохранил вход (set-codex-auth).
+	var codex *agent.Codex
+	if a, _ := e.sec.Get(secrets.CodexAuth); strings.TrimSpace(a) != "" {
+		codex = &agent.Codex{R: run, Image: e.cfg.AgentImage, Model: e.cfg.CodexModel, Auth: secretAuth{e.sec, secrets.CodexAuth}}
+		executors = append(executors, manager.Option{Name: "codex", Description: "OpenAI Codex (ChatGPT subscription): any coding task; " +
+			"it runs in parallel with claude, so give independent tasks to different executors to finish sooner"})
+	}
 	reg := api.Registries{Skills: skillReg.Names(), MCPProfiles: mcpReg.ProfileNames()}
 	for _, x := range executors {
 		reg.Executors = append(reg.Executors, x.Name)
 	}
-	h, err = e.client.RegisterHost(ctx, e.cfg.HostName, runtime.GOOS, caps, envs,
-		[]api.WorkerSpec{{Kind: "claude_code", Model: e.cfg.ClaudeModel}}, reg)
+	workers := []api.WorkerSpec{{Kind: "claude_code", Model: e.cfg.ClaudeModel}}
+	if codex != nil {
+		workers = append(workers, api.WorkerSpec{Kind: "codex", Model: e.cfg.CodexModel})
+	}
+	h, err = e.client.RegisterHost(ctx, e.cfg.HostName, runtime.GOOS, caps, envs, workers, reg)
 	if err != nil {
 		return err
 	}
@@ -528,25 +562,23 @@ func runHost(ctx context.Context, e *env) error {
 			mcpOpts[name] = p.Description
 		}
 	}
+	// Вторая очередь берёт задачу, только если свободно ≥ 8 ГБ и локальная модель не работает (7.8).
+	lanes := &host.Lanes{MinFreeRAM: 8 << 30}
 	hst := &host.Host{
 		API: e.client, Git: g, WorkerID: workerID, Log: log,
 		PollEvery: 10 * time.Second, HeartbeatEvery: 30 * time.Second,
 		Agent:    claude,
 		Verifier: verify.Verifier{R: run, DefaultImage: e.cfg.AgentImage},
-		Reviewer: reviewers{
-			// Logic QA: Gemini на сервере; пока ключа нет — Claude Haiku на ПК (решение 7.4/1).
-			logic: review.Chain{Primary: review.Server{API: e.client, WorkerID: workerID},
-				Fallback: review.Claude{Agent: claude, Model: e.cfg.ReviewModel}},
-			techLead: review.Claude{Agent: claude, Model: e.cfg.TechLeadModel},
-			vision:   visionQA,
-		},
-		Junior:  junior,
-		Skills:  skillReg,
-		MCP:     mcpReg,
-		Planner: manager.Manager{Agent: claude, Model: e.cfg.ManagerModel},
-		Windows: windowsEnv,
-		Scanner: scanner,
-		Audit:   sink,
+		Reviewer: makeReviewers(e, workerID, claude, codex, visionQA),
+		Junior:   junior,
+		Lane:     host.LaneMain,
+		Lanes:    lanes,
+		Skills:   skillReg,
+		MCP:      mcpReg,
+		Planner:  manager.Manager{Agent: claude, Model: e.cfg.ManagerModel},
+		Windows:  windowsEnv,
+		Scanner:  scanner,
+		Audit:    sink,
 		Catalog: manager.Catalog{Capabilities: caps, Environments: envs,
 			Executors: executors, Skills: manager.Options(skillOpts), MCPProfiles: manager.Options(mcpOpts)},
 	}
@@ -568,6 +600,21 @@ func runHost(ctx context.Context, e *env) error {
 	}
 	log.Info("aicrew-host started", "host", h.ID, "worker", workerID, "repositories", len(paths), "orphans_removed", len(removed),
 		"skills", len(reg.Skills), "mcp_profiles", reg.MCPProfiles, "executors", reg.Executors, "vision_qa", visionQA != nil, "environments", envs)
+	if codex != nil {
+		hst.Codex = codex
+		// Очередь Codex — копия хоста со своим работником: задачи Codex идут параллельно с Claude.
+		codexWorker := h.Workers["codex/"+e.cfg.CodexModel]
+		lane := *hst
+		lane.WorkerID, lane.Lane, lane.Wake = codexWorker, host.LaneCodex, nil
+		lane.Reviewer = makeReviewers(e, codexWorker, claude, codex, visionQA)
+		lane.Log = log.With("lane", host.LaneCodex)
+		go func() {
+			if err := lane.Run(ctx); err != nil {
+				lane.Log.Error("codex lane stopped", "err", err)
+			}
+		}()
+		log.Info("codex lane started", "worker", codexWorker)
+	}
 	return hst.Run(ctx)
 }
 
@@ -706,11 +753,32 @@ func findRepo(ctx context.Context, e *env, path string) (*api.Repository, error)
 // reviewers — Logic QA для всех задач, Tech Lead — для задач с пометкой (решение 7.4/4).
 type reviewers struct {
 	logic, techLead, vision review.Reviewer
+	// codexTechLead — перекрёстное ревью (7.8): код Claude и Junior смотрит Codex; nil — Codex не подключён.
+	codexTechLead review.Reviewer
+}
+
+// makeReviewers — ревьюеры очереди: Logic QA идёт через сервер от имени работника этой очереди.
+func makeReviewers(e *env, workerID string, claude *agent.ClaudeCode, codex *agent.Codex, visionQA review.Reviewer) reviewers {
+	r := reviewers{
+		// Logic QA: Gemini на сервере; пока ключа нет — Claude Haiku на ПК (решение 7.4/1).
+		logic: review.Chain{Primary: review.Server{API: e.client, WorkerID: workerID},
+			Fallback: review.Claude{Agent: claude, Model: e.cfg.ReviewModel}},
+		techLead: review.Claude{Agent: claude, Model: e.cfg.TechLeadModel},
+		vision:   visionQA,
+	}
+	if codex != nil {
+		r.codexTechLead = review.Codex{Agent: codex}
+	}
+	return r
 }
 
 func (r reviewers) Review(ctx context.Context, role string, t *api.Task, workdir string, f review.Facts) (api.Verdict, error) {
 	switch role {
 	case review.RoleTechLead:
+		// Перекрёстно: модели разных компаний лучше ловят чужие ошибки, чем свои.
+		if t.Executor != "codex" && r.codexTechLead != nil {
+			return r.codexTechLead.Review(ctx, role, t, workdir, f)
+		}
 		return r.techLead.Review(ctx, role, t, workdir, f)
 	case vision.Role:
 		if r.vision == nil {
@@ -809,3 +877,12 @@ func hostScanner(e *env) *secretscan.Scanner {
 	}
 	return secretscan.New(exact)
 }
+
+// secretAuth — вход Codex в хранилище секретов (DPAPI): Codex продлевает его сам, служба сохраняет новый.
+type secretAuth struct {
+	store secrets.Store
+	name  string
+}
+
+func (s secretAuth) Get() (string, error) { return s.store.Get(s.name) }
+func (s secretAuth) Set(v string) error   { return s.store.Set(s.name, v) }
