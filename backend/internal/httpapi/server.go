@@ -93,6 +93,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/heartbeat", s.authed(s.handleExecHeartbeat))
 	mux.HandleFunc("POST /api/v1/exec/tasks/{id}/transition", s.authed(s.handleExecTransition))
 	mux.HandleFunc("GET /api/v1/exec/keep-worktrees", s.authed(s.handleExecKeepWorktrees))
+	// 7.9: окно проекта, файлы, скиллы задачи, привязка кода.
+	mux.HandleFunc("GET /api/v1/projects/{id}/context", s.authed(s.handleProjectContext))
+	mux.HandleFunc("PUT /api/v1/projects/{id}/context", s.authed(s.handleSetProjectContext))
+	mux.HandleFunc("POST /api/v1/projects/{id}/files", s.authed(s.handleAddProjectFile))
+	mux.HandleFunc("GET /api/v1/projects/{id}/files/{file}", s.authed(s.handleProjectFile))
+	mux.HandleFunc("DELETE /api/v1/projects/{id}/files/{file}", s.authed(s.handleDeleteProjectFile))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/skills", s.authed(s.handleNodeSkills))
+	mux.HandleFunc("PUT /api/v1/nodes/{id}/skills", s.authed(s.handleSetNodeSkills))
+	mux.HandleFunc("GET /api/v1/exec/skills", s.authed(s.handleListSkills))
+	mux.HandleFunc("POST /api/v1/exec/repositories/bind", s.authed(s.handleBindRepository))
+	mux.HandleFunc("GET /api/v1/exec/repositories/pending", s.authed(s.handlePendingRepositories))
+	mux.HandleFunc("POST /api/v1/exec/repositories/{id}/bound", s.authed(s.handleReportRepository))
 	mux.HandleFunc("GET /api/v1/ws", s.handleWS)
 	return s.recoverer(s.cors(mux))
 }

@@ -139,7 +139,7 @@ func (s *Service) claimPlan(ctx context.Context, tx pgx.Tx, hostID, workerID uui
 	err := tx.QueryRow(ctx, `SELECT p.id, p.attempt, p.request,
 			r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch, r.verification_profile
 		FROM exec.plans p JOIN exec.repositories r ON r.id = p.repository_id JOIN exec.hosts h ON h.id = r.host_id
-		WHERE p.status = 'QUEUED' AND r.host_id = $1 AND `+pausedSQL+`
+		WHERE p.status = 'QUEUED' AND r.host_id = $1 AND r.status = 'ready' AND `+pausedSQL+`
 		ORDER BY p.created_at LIMIT 1 FOR UPDATE OF p SKIP LOCKED`, hostID).
 		Scan(&t.ID, &t.Attempt, &t.Prompt, &t.Repository.ID, &t.Repository.ProjectID, &t.Repository.HostID, &t.Repository.Name,
 			&t.Repository.LocalPath, &t.Repository.DefaultBranch, &t.Repository.IntegrationBranch, &t.Repository.VerificationProfile)
@@ -152,6 +152,12 @@ func (s *Service) claimPlan(ctx context.Context, tx pgx.Tx, hostID, workerID uui
 	t.Attempt++
 	t.Title = "plan"
 	t.LeaseExpiresAt = now.Add(PlanLeaseTTL)
+	// 7.9: Manager тоже знает проект — план строится с учётом описания и файлов.
+	if pc, err := loadProjectContext(ctx, tx, t.Repository.ProjectID); err != nil {
+		return nil, err
+	} else if pc.Description != "" || len(pc.Files) > 0 {
+		t.Project = &pc
+	}
 	_, err = tx.Exec(ctx, `UPDATE exec.plans SET status = 'PLANNING', worker_id = $2, attempt = $3, lease_expires_at = $4,
 		updated_at = now() WHERE id = $1`, t.ID, workerID, t.Attempt, t.LeaseExpiresAt)
 	return &t, err
@@ -408,6 +414,14 @@ func (s *Service) SubmitPlan(ctx context.Context, id Identity, planID, workerID 
 		lists, err := loadHostLists(ctx, tx, pl.repo)
 		if err != nil {
 			return "", "", err
+		}
+		if pl.requestedByNode != nil {
+			// 7.9: скиллы, выбранные в AI Task, — обязательные для всех задач плана.
+			ns, err := nodeSkills(ctx, tx, *pl.requestedByNode)
+			if err != nil {
+				return "", "", err
+			}
+			lists.required = append(lists.required, ns...)
 		}
 		if err := ValidateProposal(p, lists); err != nil {
 			reason = "plan rejected by the orchestrator: " + err.Error()

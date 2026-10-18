@@ -56,6 +56,8 @@ func (s *Server) handleExecRegisterHost(w http.ResponseWriter, r *http.Request, 
 		Skills      []string `json:"skills"`
 		MCPProfiles []string `json:"mcp_profiles"`
 		Executors   []string `json:"executors"`
+		// 7.9: описания скиллов — для окна выбора скиллов в приложении.
+		SkillInfo map[string]string `json:"skill_info"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -68,6 +70,12 @@ func (s *Server) handleExecRegisterHost(w http.ResponseWriter, r *http.Request, 
 	// Реестры присылает только служба (aicrew-host run); add-repo их не трогает.
 	if req.Skills != nil || req.MCPProfiles != nil || req.Executors != nil {
 		if err := s.exec.SetHostRegistries(r.Context(), execIdentity(id), h.ID, req.Skills, req.MCPProfiles, req.Executors); err != nil {
+			s.execError(w, r, err)
+			return
+		}
+	}
+	if req.SkillInfo != nil {
+		if err := s.exec.SetSkillInfo(r.Context(), execIdentity(id), h.ID, req.SkillInfo); err != nil {
 			s.execError(w, r, err)
 			return
 		}

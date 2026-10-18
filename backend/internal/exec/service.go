@@ -144,6 +144,10 @@ type Repository struct {
 	DefaultBranch       string          `json:"default_branch"`
 	IntegrationBranch   string          `json:"integration_branch"`
 	VerificationProfile json.RawMessage `json:"verification_profile"`
+	// 7.9: привязка из окна проекта — git-адрес и состояние заявки (pending → ready | failed).
+	GitURL      string `json:"git_url"`
+	Status      string `json:"status"`
+	StatusError string `json:"status_error"`
 }
 
 func requireProjectWrite(ctx context.Context, q pgx.Tx, userID, projectID uuid.UUID) error {
@@ -317,7 +321,16 @@ func (s *Service) CreateTask(ctx context.Context, userID uuid.UUID, in NewTask) 
 		Required []string `json:"required"`
 	}
 	_ = json.Unmarshal(policy, &pol)
-	for _, sk := range pol.Required {
+	required := pol.Required
+	if in.NodeID != nil {
+		// 7.9: скиллы, выбранные в самой AI Task.
+		ns, err := nodeSkills(ctx, tx, *in.NodeID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		required = append(required, ns...)
+	}
+	for _, sk := range required {
 		if !slices.Contains(in.RequiredSkills, sk) {
 			in.RequiredSkills = append(in.RequiredSkills, sk)
 		}
@@ -396,24 +409,26 @@ func insertTask(ctx context.Context, tx pgx.Tx, userID, repoProject uuid.UUID, i
 // ClaimedTask — всё, что нужно хосту для выполнения.
 type ClaimedTask struct {
 	// Kind — что делать: execute (агент и проверка), merge (слить в integration), rollback (откатить слияние).
-	Kind             string         `json:"kind"`
-	ID               uuid.UUID      `json:"id"`
-	ReviewLevel      string         `json:"review_level"`
-	RequiredSkills   []string       `json:"required_skills"`
-	MCPProfile       string         `json:"mcp_profile"`
-	TouchesUI        bool           `json:"touches_ui"`
-	Executor         string         `json:"executor"`
-	Contract         *Contract      `json:"contract,omitempty"`
-	Attempt          int            `json:"attempt"`
-	Title            string         `json:"title"`
-	Prompt           string         `json:"prompt"`
-	ExecutionEnv     string         `json:"execution_env"`
-	LeaseExpiresAt   time.Time      `json:"lease_expires_at"`
-	AgentRuntimeSec  int            `json:"agent_runtime_sec"`
-	VerifyRuntimeSec int            `json:"verification_runtime_sec"`
-	Repository       Repository     `json:"repository"`
-	PreviousAttempts []AttemptFacts `json:"previous_attempts"`
-	MergeCommit      string         `json:"merge_commit,omitempty"` // для rollback
+	Kind           string    `json:"kind"`
+	ID             uuid.UUID `json:"id"`
+	ReviewLevel    string    `json:"review_level"`
+	RequiredSkills []string  `json:"required_skills"`
+	MCPProfile     string    `json:"mcp_profile"`
+	TouchesUI      bool      `json:"touches_ui"`
+	Executor       string    `json:"executor"`
+	Contract       *Contract `json:"contract,omitempty"`
+	// Project — описание проекта и список его файлов (7.9): служба кладёт их агенту.
+	Project          *ProjectContext `json:"project,omitempty"`
+	Attempt          int             `json:"attempt"`
+	Title            string          `json:"title"`
+	Prompt           string          `json:"prompt"`
+	ExecutionEnv     string          `json:"execution_env"`
+	LeaseExpiresAt   time.Time       `json:"lease_expires_at"`
+	AgentRuntimeSec  int             `json:"agent_runtime_sec"`
+	VerifyRuntimeSec int             `json:"verification_runtime_sec"`
+	Repository       Repository      `json:"repository"`
+	PreviousAttempts []AttemptFacts  `json:"previous_attempts"`
+	MergeCommit      string          `json:"merge_commit,omitempty"` // для rollback
 }
 
 const (
@@ -495,7 +510,7 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		FROM exec.tasks t
 		JOIN exec.repositories r ON r.id = t.repository_id
 		JOIN exec.hosts h ON h.id = r.host_id
-		WHERE t.status = 'QUEUED' AND r.host_id = $1
+		WHERE t.status = 'QUEUED' AND r.host_id = $1 AND r.status = 'ready'
 		  AND (t.retry_after IS NULL OR t.retry_after <= $2)
 		  AND h.environments @> to_jsonb(t.execution_env)
 		  AND h.capabilities @> t.required_capabilities
@@ -523,6 +538,11 @@ func (s *Service) Claim(ctx context.Context, id Identity, workerID uuid.UUID) (*
 		if err := json.Unmarshal(contract, t.Contract); err != nil {
 			return nil, err
 		}
+	}
+	if pc, err := loadProjectContext(ctx, tx, t.Repository.ProjectID); err != nil {
+		return nil, err
+	} else if pc.Description != "" || len(pc.Files) > 0 {
+		t.Project = &pc
 	}
 	t.Attempt++
 	t.LeaseExpiresAt = now.Add(LeaseTTL)
@@ -1290,17 +1310,13 @@ func (s *Service) ListTasks(ctx context.Context, userID uuid.UUID, projectID *uu
 
 func (s *Service) ListRepositories(ctx context.Context, userID uuid.UUID) ([]Repository, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.id, r.project_id, r.host_id, r.name, r.local_path, r.default_branch, r.integration_branch,
-			r.verification_profile
+			r.verification_profile, r.git_url, r.status, r.status_error
 		FROM exec.repositories r JOIN core.project_access a ON a.project_id = r.project_id AND a.user_id = $1
 		ORDER BY r.created_at`, userID)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Repository, error) {
-		var v Repository
-		err := r.Scan(&v.ID, &v.ProjectID, &v.HostID, &v.Name, &v.LocalPath, &v.DefaultBranch, &v.IntegrationBranch, &v.VerificationProfile)
-		return v, err
-	})
+	return pgx.CollectRows(rows, scanRepository)
 }
 
 // KeepWorktrees — задачи на репозиториях хоста этого устройства, чьи worktree нужны:
